@@ -1,5 +1,7 @@
-from fastapi.responses import FileResponse
+from fastapi import APIRouter
 
-@app.get("/")
+router = APIRouter()
+
+@router.get("/")
 def root():
-    return FileResponse("app/static/index.html")
+    return {"status": "ok"}
