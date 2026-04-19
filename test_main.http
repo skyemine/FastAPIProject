@@ -1,0 +1,43 @@
+# Health
+
+GET http://127.0.0.1:8000/api/health
+Accept: application/json
+
+###
+
+# Register user 1
+
+POST http://127.0.0.1:8000/api/auth/register
+Content-Type: application/json
+
+{
+  "username": "sky_dev",
+  "display_name": "Sky",
+  "password": "supersecure123"
+}
+
+###
+
+# Register user 2
+
+POST http://127.0.0.1:8000/api/auth/register
+Content-Type: application/json
+
+{
+  "username": "alex_dev",
+  "display_name": "Alex",
+  "password": "supersecure123"
+}
+
+###
+
+# Send friend request
+
+POST http://127.0.0.1:8000/api/friend-requests
+Content-Type: application/json
+
+{
+  "username": "alex_dev"
+}
+
+###

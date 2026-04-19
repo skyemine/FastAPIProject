@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from main import create_app
+
+
+def build_settings(tmp_path) -> Settings:
+    return Settings(
+        app_env="test",
+        app_name="PulseChat Test",
+        database_url=f"sqlite:///{tmp_path / 'pulsechat-dm.db'}",
+        secret_key="test-secret-key",
+        session_cookie_name="pulsechat_session",
+        session_max_age_seconds=3600,
+        cookie_secure=False,
+        allowed_hosts=["testserver", "localhost", "127.0.0.1"],
+        allowed_origins=[],
+        force_https=False,
+        auth_rate_limit_count=20,
+        auth_rate_limit_window_seconds=60,
+        message_rate_limit_count=50,
+        message_rate_limit_window_seconds=10,
+        message_history_limit=50,
+        hsts_max_age_seconds=3600,
+    )
+
+
+def register(client: TestClient, username: str, display_name: str) -> None:
+    response = client.post(
+        "/api/auth/register",
+        json={"username": username, "password": "supersecure123", "display_name": display_name},
+    )
+    assert response.status_code == 201
+
+
+def test_frontend_and_auth_flow(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as client:
+        frontend_response = client.get("/")
+        assert frontend_response.status_code == 200
+        assert "Private messenger" in frontend_response.text
+
+        session_response = client.get("/api/session")
+        assert session_response.status_code == 200
+        assert session_response.json()["authenticated"] is False
+
+        register(client, "alice_dev", "Alice")
+
+        session_response = client.get("/api/session")
+        assert session_response.json()["authenticated"] is True
+        assert session_response.json()["user"]["username"] == "alice_dev"
+
+
+def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as alice_client:
+        register(alice_client, "alice_dev", "Alice")
+        send_request = alice_client.post("/api/friend-requests", json={"username": "bob_dev"})
+        assert send_request.status_code == 404
+
+    with TestClient(app) as bob_client:
+        register(bob_client, "bob_dev", "Bob")
+
+    with TestClient(app) as alice_client:
+        login = alice_client.post("/api/auth/login", json={"username": "alice_dev", "password": "supersecure123"})
+        assert login.status_code == 200
+        send_request = alice_client.post("/api/friend-requests", json={"username": "bob_dev"})
+        assert send_request.status_code == 201
+
+    with TestClient(app) as bob_client:
+        login = bob_client.post("/api/auth/login", json={"username": "bob_dev", "password": "supersecure123"})
+        assert login.status_code == 200
+        requests_response = bob_client.get("/api/friend-requests")
+        assert requests_response.status_code == 200
+        request_id = requests_response.json()[0]["id"]
+        accept_response = bob_client.post(f"/api/friend-requests/{request_id}/accept")
+        assert accept_response.status_code == 200
+        friends_response = bob_client.get("/api/friends")
+        assert friends_response.status_code == 200
+        assert friends_response.json()[0]["username"] == "alice_dev"
+
+    with TestClient(app) as alice_client:
+        login = alice_client.post("/api/auth/login", json={"username": "alice_dev", "password": "supersecure123"})
+        assert login.status_code == 200
+        with alice_client.websocket_connect("/ws/direct/bob_dev") as websocket:
+            history_payload = websocket.receive_json()
+            assert history_payload["type"] == "history"
+            assert history_payload["friend"]["username"] == "bob_dev"
+            websocket.send_json({"content": "Hello Bob"})
+            message_payload = websocket.receive_json()
+            assert message_payload["type"] == "message"
+            assert message_payload["message"]["content"] == "Hello Bob"
+
+        history_response = alice_client.get("/api/direct/bob_dev/messages")
+        assert history_response.status_code == 200
+        assert history_response.json()[0]["content"] == "Hello Bob"
+
+
+def test_rejects_weak_passwords(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/register",
+            json={"username": "weak_dev", "password": "weakpass", "display_name": "Weak"},
+        )
+        assert response.status_code == 422
+        assert "Password" in response.json()["detail"]

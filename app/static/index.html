@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PulseChat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+
+  <button id="sidebar-toggle" aria-label="Toggle sidebar">☰</button>
+
+  <!-- AUTH -->
+  <div class="auth-shell" id="auth-shell">
+    <section class="auth-side">
+      <p class="eyebrow">Private messenger</p>
+      <h1>PulseChat</h1>
+      <p class="auth-copy">Simple direct messages between people. Add by username, accept friend requests, and chat one-to-one.</p>
+    </section>
+
+    <section class="auth-card">
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tab-login" type="button">Login</button>
+        <button class="auth-tab" id="tab-register" type="button">Register</button>
+      </div>
+
+      <form class="auth-form active" id="login-form">
+        <h2>Sign in</h2>
+        <label>Username<input name="username" required autocomplete="username"></label>
+        <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+        <button class="primary-btn" type="submit">Open chats</button>
+      </form>
+
+      <form class="auth-form" id="register-form">
+        <h2>Create account</h2>
+        <label>Username<input name="username" required autocomplete="username"></label>
+        <label>Display name<input name="display_name" autocomplete="name"></label>
+        <label>Password<input name="password" type="password" required autocomplete="new-password"></label>
+        <button class="primary-btn" type="submit">Create account</button>
+      </form>
+
+      <p class="auth-error" id="auth-error"></p>
+    </section>
+  </div>
+
+  <!-- APP -->
+  <div class="app-shell hidden" id="app-shell">
+    <aside class="sidebar">
+
+      <section class="profile-card">
+        <div class="avatar" id="user-avatar">PC</div>
+        <div class="profile-meta">
+          <strong id="user-name">Guest</strong>
+          <span id="user-handle">@guest</span>
+        </div>
+        <button class="ghost-btn" id="logout-btn" type="button">Logout</button>
+      </section>
+
+      <section class="panel-card">
+        <div class="panel-head">
+          <p class="eyebrow">Add friend</p>
+          <h3>By username</h3>
+        </div>
+        <form class="inline-form" id="friend-form">
+          <input id="friend-username" name="username" placeholder="username" required>
+          <button class="primary-btn small" type="submit">Send</button>
+        </form>
+        <p class="helper-text">Type exact username to send a request.</p>
+      </section>
+
+      <section class="panel-card">
+        <div class="panel-head">
+          <p class="eyebrow">Requests</p>
+          <h3>Incoming</h3>
+        </div>
+        <div class="stack-list" id="requests-list"></div>
+      </section>
+
+      <section class="panel-card flex-fill">
+        <div class="panel-head">
+          <p class="eyebrow">Friends</p>
+          <h3>Your people</h3>
+        </div>
+        <div class="stack-list" id="friends-list"></div>
+      </section>
+
+    </aside>
+
+    <main class="chat-shell">
+      <header class="chat-header">
+        <div class="chat-person">
+          <div class="avatar large" id="chat-avatar">DM</div>
+          <div>
+            <p class="eyebrow">Direct chat</p>
+            <h2 id="chat-title">Choose a friend</h2>
+            <p class="chat-subtitle" id="chat-subtitle">Accept a request or pick a friend from the list.</p>
+          </div>
+        </div>
+        <span class="status-pill" id="chat-status">Offline</span>
+      </header>
+
+      <section class="message-stream" id="message-stream"></section>
+
+      <footer class="composer-wrap">
+        <form class="composer" id="composer-form">
+          <textarea id="composer-input" rows="1" maxlength="2000" placeholder="Write a private message…" disabled></textarea>
+          <button class="primary-btn" id="send-btn" type="submit" disabled>Send</button>
+        </form>
+        <p class="status-line" id="status-line">No chat selected</p>
+      </footer>
+    </main>
+  </div>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
