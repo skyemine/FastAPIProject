@@ -5,8 +5,12 @@ const state = {
   activeFriend: null,
   activeFriendMeta: null,
   messagesByFriend: new Map(),
-  socket: null,
+  socket: null
 };
+
+const MOBILE_WIDTH = 860;
+const THEME_KEY = "prism_theme";
+const THEMES = ["light", "dark", "petal-soft"];
 
 const elements = {
   authShell: document.getElementById("auth-shell"),
@@ -37,7 +41,36 @@ const elements = {
   sidebarToggle: document.getElementById("sidebar-toggle"),
   sidebarOverlay: document.getElementById("sidebar-overlay"),
   sidebarClose: document.getElementById("sidebar-close"),
+  themeBtn: document.getElementById("theme-btn"),
+  themeBtnApp: document.getElementById("theme-btn-app"),
+  themeBtnDesktop: document.getElementById("theme-btn-desktop")
 };
+
+function isMobileLayout() {
+  return window.matchMedia(`(max-width: ${MOBILE_WIDTH}px)`).matches;
+}
+
+function applyTheme(theme) {
+  const t = THEMES.includes(theme) ? theme : "light";
+  document.documentElement.setAttribute("data-theme", t);
+  localStorage.setItem(THEME_KEY, t);
+
+  const label = t === "petal-soft" ? "Petal Soft" : t[0].toUpperCase() + t.slice(1);
+  if (elements.themeBtn) elements.themeBtn.textContent = `Тема: ${label}`;
+  if (elements.themeBtnApp) elements.themeBtnApp.textContent = label;
+  if (elements.themeBtnDesktop) elements.themeBtnDesktop.textContent = label;
+}
+
+function nextTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  const idx = THEMES.indexOf(current);
+  applyTheme(THEMES[(idx + 1) % THEMES.length]);
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  applyTheme(saved && THEMES.includes(saved) ? saved : "light");
+}
 
 function switchAuthTab(mode) {
   const loginActive = mode === "login";
@@ -45,15 +78,17 @@ function switchAuthTab(mode) {
   elements.registerTab.classList.toggle("active", !loginActive);
   elements.loginForm.classList.toggle("active", loginActive);
   elements.registerForm.classList.toggle("active", !loginActive);
+  elements.loginTab.setAttribute("aria-selected", String(loginActive));
+  elements.registerTab.setAttribute("aria-selected", String(!loginActive));
   elements.authError.textContent = "";
 }
 
 function toggleSidebar(show) {
-  const isOpen =
-    show !== undefined ? show : !elements.sidebar.classList.contains("open");
+  const isOpen = show !== undefined ? show : !elements.sidebar.classList.contains("open");
   elements.sidebar.classList.toggle("open", isOpen);
   elements.sidebarOverlay.classList.toggle("show", isOpen);
   document.body.classList.toggle("no-scroll", isOpen);
+  if (elements.sidebarToggle) elements.sidebarToggle.setAttribute("aria-expanded", String(isOpen));
 }
 
 async function api(path, options = {}) {
@@ -61,16 +96,17 @@ async function api(path, options = {}) {
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {}),
+      ...(options.headers || {})
     },
-    ...options,
+    ...options
   });
+
   if (response.status === 204) return null;
+
   const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-  if (!response.ok) throw new Error(payload.detail || payload || "Request failed");
+  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+
+  if (!response.ok) throw new Error(payload?.detail || payload || "Request failed");
   return payload;
 }
 
@@ -80,43 +116,51 @@ function setStatus(message) {
 
 function formatDate(value) {
   const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString([], {
     hour: "2-digit",
     minute: "2-digit",
     day: "2-digit",
-    month: "short",
+    month: "short"
   });
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
 function renderRequests() {
   elements.requestsList.innerHTML = "";
   if (!state.requests.length) {
-    elements.requestsList.innerHTML =
-      '<div class="empty-small">No pending requests.</div>';
+    elements.requestsList.appendChild(el("div", "empty-small", "Немає вхідних запитів."));
     return;
   }
+
   for (const item of state.requests) {
-    const card = document.createElement("div");
-    card.className = "list-card";
-    card.innerHTML = `
-      <div class="list-user">
-        <div class="avatar mini">${item.requester.initials}</div>
-        <div>
-          <strong>${item.requester.display_name}</strong>
-          <span>@${item.requester.username}</span>
-        </div>
-      </div>
-      <div class="actions-row">
-        <button class="primary-btn small" data-action="accept">Accept</button>
-        <button class="ghost-btn small" data-action="reject">Decline</button>
-      </div>
-    `;
-    card
-      .querySelector('[data-action="accept"]')
-      .addEventListener("click", () => handleFriendRequest(item.id, "accept"));
-    card
-      .querySelector('[data-action="reject"]')
-      .addEventListener("click", () => handleFriendRequest(item.id, "reject"));
+    const card = el("div", "list-card");
+    const user = el("div", "list-user");
+    user.appendChild(el("div", "avatar mini", item.requester.initials || "??"));
+    const meta = el("div");
+    meta.appendChild(el("strong", "", item.requester.display_name || item.requester.username));
+    meta.appendChild(el("span", "", `@${item.requester.username}`));
+    user.appendChild(meta);
+
+    const actions = el("div", "actions-row");
+    const acceptBtn = el("button", "primary-btn small", "Прийняти");
+    acceptBtn.type = "button";
+    acceptBtn.addEventListener("click", () => handleFriendRequest(item.id, "accept"));
+
+    const rejectBtn = el("button", "ghost-btn small", "Відхилити");
+    rejectBtn.type = "button";
+    rejectBtn.addEventListener("click", () => handleFriendRequest(item.id, "reject"));
+
+    actions.appendChild(acceptBtn);
+    actions.appendChild(rejectBtn);
+    card.appendChild(user);
+    card.appendChild(actions);
     elements.requestsList.appendChild(card);
   }
 }
@@ -124,25 +168,27 @@ function renderRequests() {
 function renderFriends() {
   elements.friendsList.innerHTML = "";
   if (!state.friends.length) {
-    elements.friendsList.innerHTML =
-      '<div class="empty-small">No friends yet.<br>Add someone by username.</div>';
+    const empty = el("div", "empty-small");
+    empty.innerHTML = "Друзів ще немає.<br>Додайте когось за username.";
+    elements.friendsList.appendChild(empty);
     return;
   }
+
   for (const friend of state.friends) {
-    const button = document.createElement("button");
+    const button = el("button", "friend-item");
     button.type = "button";
-    button.className = "friend-item";
     button.classList.toggle("active", friend.username === state.activeFriend);
-    button.innerHTML = `
-      <div class="list-user">
-        <div class="avatar mini">${friend.initials}</div>
-        <div>
-          <strong>${friend.display_name}</strong>
-          <span>@${friend.username}</span>
-        </div>
-      </div>
-      <span class="presence-dot ${friend.is_online ? "online" : ""}"></span>
-    `;
+
+    const user = el("div", "list-user");
+    user.appendChild(el("div", "avatar mini", friend.initials || "??"));
+    const meta = el("div");
+    meta.appendChild(el("strong", "", friend.display_name || friend.username));
+    meta.appendChild(el("span", "", `@${friend.username}`));
+    user.appendChild(meta);
+
+    const dot = el("span", `presence-dot ${friend.is_online ? "online" : ""}`);
+    button.appendChild(user);
+    button.appendChild(dot);
     button.addEventListener("click", () => selectFriend(friend.username));
     elements.friendsList.appendChild(button);
   }
@@ -151,28 +197,28 @@ function renderFriends() {
 function renderMessages() {
   elements.messageStream.innerHTML = "";
   const messages = state.messagesByFriend.get(state.activeFriend) || [];
+
   if (!messages.length) {
-    elements.messageStream.innerHTML =
-      '<div class="empty-state">No messages yet.<br>Start this conversation.</div>';
+    const empty = el("div", "empty-state");
+    empty.appendChild(el("strong", "", "Повідомлень ще немає"));
+    empty.appendChild(el("p", "", "Почніть розмову першими"));
+    elements.messageStream.appendChild(empty);
     return;
   }
+
   for (const message of messages) {
-    const mine =
-      state.session &&
-      message.sender_username === state.session.user.username;
-    const article = document.createElement("article");
-    article.className = `message ${mine ? "mine" : ""}`;
-    article.innerHTML = `
-      <div class="message-bubble">
-        <div class="message-head">
-          <strong>${message.sender_display_name}</strong>
-          <span>${formatDate(message.sent_at)}</span>
-        </div>
-        <div>${message.content}</div>
-      </div>
-    `;
+    const mine = state.session && message.sender_username === state.session.user.username;
+    const article = el("article", `message ${mine ? "mine" : ""}`);
+    const bubble = el("div", "message-bubble");
+    const head = el("div", "message-head");
+    head.appendChild(el("strong", "", message.sender_display_name || message.sender_username || "User"));
+    head.appendChild(el("span", "", formatDate(message.sent_at)));
+    bubble.appendChild(head);
+    bubble.appendChild(el("div", "", message.content || ""));
+    article.appendChild(bubble);
     elements.messageStream.appendChild(article);
   }
+
   elements.messageStream.scrollTop = elements.messageStream.scrollHeight;
 }
 
@@ -184,25 +230,24 @@ function disconnectSocket() {
 }
 
 function updateActiveFriendMeta() {
-  const friend = state.friends.find(
-    (item) => item.username === state.activeFriend
-  );
+  const friend = state.friends.find(item => item.username === state.activeFriend);
   state.activeFriendMeta = friend || null;
+
   if (!friend) {
     elements.chatAvatar.textContent = "DM";
-    elements.chatTitle.textContent = "Select a friend";
-    elements.chatSubtitle.textContent =
-      "Accept a request or choose a friend from the list.";
-    elements.chatStatus.textContent = "Offline";
+    elements.chatTitle.textContent = "Виберіть друга";
+    elements.chatSubtitle.textContent = "Прийміть запит або виберіть друга зі списку.";
+    elements.chatStatus.textContent = "Офлайн";
     elements.chatStatus.classList.remove("online");
     elements.composerInput.disabled = true;
     elements.sendBtn.disabled = true;
     return;
   }
-  elements.chatAvatar.textContent = friend.initials;
-  elements.chatTitle.textContent = friend.display_name;
+
+  elements.chatAvatar.textContent = friend.initials || "DM";
+  elements.chatTitle.textContent = friend.display_name || friend.username;
   elements.chatSubtitle.textContent = `@${friend.username}`;
-  elements.chatStatus.textContent = friend.is_online ? "Online" : "Offline";
+  elements.chatStatus.textContent = friend.is_online ? "Онлайн" : "Офлайн";
   elements.chatStatus.classList.toggle("online", friend.is_online);
   elements.composerInput.disabled = false;
   elements.sendBtn.disabled = false;
@@ -210,35 +255,35 @@ function updateActiveFriendMeta() {
 
 function connectSocket(username) {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(
-    `${protocol}://${window.location.host}/ws/direct/${username}`
-  );
+  const socket = new WebSocket(`${protocol}://${window.location.host}/ws/direct/${username}`);
   state.socket = socket;
-  setStatus(`Connecting to @${username}...`);
+  setStatus(`Підключення до @${username}...`);
 
-  socket.addEventListener("open", () => {
-    setStatus(`Connected to @${username}`);
-  });
-
+  socket.addEventListener("open", () => setStatus(`Чат з @${username} підключено`));
   socket.addEventListener("close", () => {
-    if (state.socket === socket) {
-      setStatus("Disconnected");
-    }
+    if (state.socket === socket) setStatus("З’єднання розірвано");
   });
 
-  socket.addEventListener("message", (event) => {
-    const payload = JSON.parse(event.data);
+  socket.addEventListener("message", event => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
     if (payload.type === "history") {
-      state.messagesByFriend.set(username, payload.messages);
-      const friend = state.friends.find((item) => item.username === username);
-      if (friend) {
-        friend.is_online = payload.friend.is_online;
+      state.messagesByFriend.set(username, payload.messages || []);
+      const friend = state.friends.find(item => item.username === username);
+      if (friend && payload.friend) {
+        friend.is_online = !!payload.friend.is_online;
         renderFriends();
         updateActiveFriendMeta();
       }
       renderMessages();
       return;
     }
+
     if (payload.type === "message") {
       const list = state.messagesByFriend.get(username) || [];
       list.push(payload.message);
@@ -247,31 +292,31 @@ function connectSocket(username) {
       loadFriends();
       return;
     }
-    if (payload.type === "error") {
-      setStatus(payload.detail);
-    }
+
+    if (payload.type === "error") setStatus(payload.detail || "Помилка чату");
   });
 }
 
 async function selectFriend(username) {
+  if (!username) return;
   state.activeFriend = username;
   renderFriends();
   updateActiveFriendMeta();
   disconnectSocket();
   connectSocket(username);
   renderMessages();
-  toggleSidebar(false);
+  if (isMobileLayout()) toggleSidebar(false);
+  setTimeout(() => elements.composerInput.focus(), 50);
 }
 
 async function loadFriends() {
   state.friends = await api("/api/friends");
   renderFriends();
   updateActiveFriendMeta();
-  if (
-    state.activeFriend &&
-    !state.friends.find((item) => item.username === state.activeFriend)
-  ) {
+
+  if (state.activeFriend && !state.friends.find(item => item.username === state.activeFriend)) {
     state.activeFriend = null;
+    disconnectSocket();
     updateActiveFriendMeta();
     renderMessages();
   }
@@ -284,21 +329,22 @@ async function loadRequests() {
 
 async function refreshSession() {
   state.session = await api("/api/session");
+
   if (!state.session.authenticated) {
     elements.authShell.classList.remove("hidden");
     elements.appShell.classList.add("hidden");
     disconnectSocket();
     return false;
   }
+
   elements.authShell.classList.add("hidden");
   elements.appShell.classList.remove("hidden");
-  elements.userAvatar.textContent = state.session.user.initials;
-  elements.userName.textContent = state.session.user.display_name;
+  elements.userAvatar.textContent = state.session.user.initials || "PR";
+  elements.userName.textContent = state.session.user.display_name || "Користувач";
   elements.userHandle.textContent = `@${state.session.user.username}`;
+
   await Promise.all([loadFriends(), loadRequests()]);
-  if (!state.activeFriend && state.friends.length) {
-    await selectFriend(state.friends[0].username);
-  }
+  if (!state.activeFriend && state.friends.length) await selectFriend(state.friends[0].username);
   return true;
 }
 
@@ -306,6 +352,7 @@ async function submitAuth(path, formElement) {
   const payload = Object.fromEntries(new FormData(formElement).entries());
   try {
     await api(path, { method: "POST", body: JSON.stringify(payload) });
+    elements.authError.textContent = "";
     await refreshSession();
   } catch (error) {
     elements.authError.textContent = error.message;
@@ -316,13 +363,11 @@ async function handleFriendAdd(event) {
   event.preventDefault();
   const payload = { username: elements.friendUsername.value.trim() };
   if (!payload.username) return;
+
   try {
-    await api("/api/friend-requests", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    await api("/api/friend-requests", { method: "POST", body: JSON.stringify(payload) });
     elements.friendUsername.value = "";
-    setStatus("Friend request sent.");
+    setStatus("Запит дружби надіслано");
   } catch (error) {
     setStatus(error.message);
   }
@@ -330,13 +375,9 @@ async function handleFriendAdd(event) {
 
 async function handleFriendRequest(requestId, action) {
   try {
-    await api(`/api/friend-requests/${requestId}/${action}`, {
-      method: "POST",
-    });
+    await api(`/api/friend-requests/${requestId}/${action}`, { method: "POST" });
     await Promise.all([loadRequests(), loadFriends()]);
-    setStatus(
-      action === "accept" ? "Friend added." : "Friend request declined."
-    );
+    setStatus(action === "accept" ? "Друга додано" : "Запит відхилено");
   } catch (error) {
     setStatus(error.message);
   }
@@ -345,13 +386,7 @@ async function handleFriendRequest(requestId, action) {
 async function handleComposerSubmit(event) {
   event.preventDefault();
   const content = elements.composerInput.value.trim();
-  if (
-    !content ||
-    !state.socket ||
-    state.socket.readyState !== WebSocket.OPEN
-  ) {
-    return;
-  }
+  if (!content || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
   state.socket.send(JSON.stringify({ content }));
   elements.composerInput.value = "";
   autoresizeComposer();
@@ -379,38 +414,54 @@ async function logout() {
   renderRequests();
   renderMessages();
   toggleSidebar(false);
+  setStatus("Ви вийшли з акаунта");
 }
 
 function bindEvents() {
   elements.loginTab.addEventListener("click", () => switchAuthTab("login"));
-  elements.registerTab.addEventListener("click", () =>
-    switchAuthTab("register")
-  );
-  elements.loginForm.addEventListener("submit", (event) => {
+  elements.registerTab.addEventListener("click", () => switchAuthTab("register"));
+
+  elements.loginForm.addEventListener("submit", event => {
     event.preventDefault();
     submitAuth("/api/auth/login", elements.loginForm);
   });
-  elements.registerForm.addEventListener("submit", (event) => {
+
+  elements.registerForm.addEventListener("submit", event => {
     event.preventDefault();
     submitAuth("/api/auth/register", elements.registerForm);
   });
+
   elements.friendForm.addEventListener("submit", handleFriendAdd);
   elements.logoutBtn.addEventListener("click", logout);
   elements.composerForm.addEventListener("submit", handleComposerSubmit);
   elements.composerInput.addEventListener("input", autoresizeComposer);
 
+  elements.composerInput.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      elements.composerForm.requestSubmit();
+    }
+  });
+
   elements.sidebarToggle.addEventListener("click", () => toggleSidebar());
   elements.sidebarClose.addEventListener("click", () => toggleSidebar(false));
   elements.sidebarOverlay.addEventListener("click", () => toggleSidebar(false));
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && elements.sidebar.classList.contains("open")) {
-      toggleSidebar(false);
-    }
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && elements.sidebar.classList.contains("open")) toggleSidebar(false);
   });
+
+  window.addEventListener("resize", () => {
+    if (!isMobileLayout() && elements.sidebar.classList.contains("open")) toggleSidebar(false);
+  });
+
+  if (elements.themeBtn) elements.themeBtn.addEventListener("click", nextTheme);
+  if (elements.themeBtnApp) elements.themeBtnApp.addEventListener("click", nextTheme);
+  if (elements.themeBtnDesktop) elements.themeBtnDesktop.addEventListener("click", nextTheme);
 }
 
 async function init() {
+  initTheme();
   bindEvents();
   switchAuthTab("login");
   updateActiveFriendMeta();
@@ -420,7 +471,7 @@ async function init() {
   try {
     await refreshSession();
   } catch {
-    setStatus("Ready for login");
+    setStatus("Готово до входу");
   }
 }
 
