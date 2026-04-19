@@ -436,7 +436,13 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         hsts_max_age=resolved_settings.hsts_max_age_seconds,
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved_settings.allowed_hosts)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
+    "fastapiproject-rnrp.onrender.com",
+    "*.onrender.com",
+    "localhost",
+    "127.0.0.1",
+])
+
 
     if resolved_settings.allowed_origins:
         app.add_middleware(
