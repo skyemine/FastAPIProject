@@ -4,9 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PulseChat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
+  <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </button>
+
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
   <div class="auth-shell" id="auth-shell">
     <section class="auth-side">
       <p class="eyebrow">Private chat</p>
@@ -40,7 +53,12 @@
   </div>
 
   <div class="app-shell hidden" id="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
+      <section class="sidebar-topbar">
+        <h2 class="sidebar-title">PulseChat</h2>
+        <button class="icon-btn close-btn" id="sidebar-close" aria-label="Close sidebar">✕</button>
+      </section>
+
       <section class="profile-card">
         <div class="avatar" id="user-avatar">PC</div>
         <div class="profile-meta">
@@ -52,10 +70,8 @@
 
       <section class="panel-card">
         <div class="panel-head">
-          <div>
-            <p class="eyebrow">Add friend</p>
-            <h3>By username</h3>
-          </div>
+          <p class="eyebrow">Add friend</p>
+          <h3>By username</h3>
         </div>
         <form class="inline-form" id="friend-form">
           <input id="friend-username" name="username" placeholder="Username" required>
@@ -66,20 +82,16 @@
 
       <section class="panel-card">
         <div class="panel-head">
-          <div>
-            <p class="eyebrow">Requests</p>
-            <h3>Incoming</h3>
-          </div>
+          <p class="eyebrow">Requests</p>
+          <h3>Incoming</h3>
         </div>
         <div class="stack-list" id="requests-list"></div>
       </section>
 
       <section class="panel-card flex-fill">
         <div class="panel-head">
-          <div>
-            <p class="eyebrow">Friends</p>
-            <h3>Your friends</h3>
-          </div>
+          <p class="eyebrow">Friends</p>
+          <h3>Your friends</h3>
         </div>
         <div class="stack-list" id="friends-list"></div>
       </section>
@@ -89,7 +101,7 @@
       <header class="chat-header">
         <div class="chat-person">
           <div class="avatar large" id="chat-avatar">DM</div>
-          <div>
+          <div class="chat-info">
             <p class="eyebrow">Direct chat</p>
             <h2 id="chat-title">Select a friend</h2>
             <p class="chat-subtitle" id="chat-subtitle">Accept a request or choose a friend from the list.</p>
