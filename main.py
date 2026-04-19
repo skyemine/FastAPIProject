@@ -1,7 +1,5 @@
-from fastapi import FastAPI
-
-app = FastAPI()
+from fastapi.responses import FileResponse
 
 @app.get("/")
 def root():
-    return {"ok": True}
+    return FileResponse("app/static/index.html")
