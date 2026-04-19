@@ -1,7 +1,3 @@
-from fastapi import APIRouter
+from app import create_app
 
-router = APIRouter()
-
-@router.get("/")
-def root():
-    return {"status": "ok"}
+app = create_app()
