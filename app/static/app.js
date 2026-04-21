@@ -10,7 +10,7 @@ const state = {
 
 const MOBILE_WIDTH = 860;
 const THEME_KEY = "prism_theme";
-const THEMES = ["light", "dark", "petal-soft"];
+const THEMES = ["light", "dark"];
 
 const elements = {
   authShell: document.getElementById("auth-shell"),
@@ -24,7 +24,7 @@ const elements = {
   userAvatar: document.getElementById("user-avatar"),
   userName: document.getElementById("user-name"),
   userHandle: document.getElementById("user-handle"),
-  friendForm: document.getElementById("friend-form"),
+  friendAddBtn: document.getElementById("friend-add-btn"),
   friendUsername: document.getElementById("friend-username"),
   requestsList: document.getElementById("requests-list"),
   friendsList: document.getElementById("friends-list"),
@@ -42,8 +42,7 @@ const elements = {
   sidebarOverlay: document.getElementById("sidebar-overlay"),
   sidebarClose: document.getElementById("sidebar-close"),
   themeBtn: document.getElementById("theme-btn"),
-  themeBtnApp: document.getElementById("theme-btn-app"),
-  themeBtnDesktop: document.getElementById("theme-btn-desktop")
+  themeBtnApp: document.getElementById("theme-btn-app")
 };
 
 function isMobileLayout() {
@@ -54,11 +53,9 @@ function applyTheme(theme) {
   const t = THEMES.includes(theme) ? theme : "light";
   document.documentElement.setAttribute("data-theme", t);
   localStorage.setItem(THEME_KEY, t);
-
-  const label = t === "petal-soft" ? "Petal Soft" : t[0].toUpperCase() + t.slice(1);
+  const label = t[0].toUpperCase() + t.slice(1);
   if (elements.themeBtn) elements.themeBtn.textContent = `Тема: ${label}`;
   if (elements.themeBtnApp) elements.themeBtnApp.textContent = label;
-  if (elements.themeBtnDesktop) elements.themeBtnDesktop.textContent = label;
 }
 
 function nextTheme() {
@@ -69,7 +66,9 @@ function nextTheme() {
 
 function initTheme() {
   const saved = localStorage.getItem(THEME_KEY);
-  applyTheme(saved && THEMES.includes(saved) ? saved : "light");
+  // migrate old petal-soft saves to light
+  const valid = saved && THEMES.includes(saved) ? saved : "light";
+  applyTheme(valid);
 }
 
 function switchAuthTab(mode) {
@@ -86,8 +85,6 @@ function switchAuthTab(mode) {
 function toggleSidebar(show) {
   const isOpen = show !== undefined ? show : !elements.sidebar.classList.contains("open");
   elements.sidebar.classList.toggle("open", isOpen);
-  elements.sidebarOverlay.classList.toggle("show", isOpen);
-  document.body.classList.toggle("no-scroll", isOpen);
   if (elements.sidebarToggle) elements.sidebarToggle.setAttribute("aria-expanded", String(isOpen));
 }
 
@@ -234,34 +231,34 @@ function updateActiveFriendMeta() {
   state.activeFriendMeta = friend || null;
 
   if (!friend) {
-    elements.chatAvatar.textContent = "DM";
     elements.chatTitle.textContent = "Виберіть друга";
     elements.chatSubtitle.textContent = "Прийміть запит або виберіть друга зі списку.";
+    elements.chatAvatar.textContent = "DM";
     elements.chatStatus.textContent = "Офлайн";
-    elements.chatStatus.classList.remove("online");
     elements.composerInput.disabled = true;
     elements.sendBtn.disabled = true;
     return;
   }
 
-  elements.chatAvatar.textContent = friend.initials || "DM";
   elements.chatTitle.textContent = friend.display_name || friend.username;
   elements.chatSubtitle.textContent = `@${friend.username}`;
+  elements.chatAvatar.textContent = friend.initials || "??";
   elements.chatStatus.textContent = friend.is_online ? "Онлайн" : "Офлайн";
-  elements.chatStatus.classList.toggle("online", friend.is_online);
   elements.composerInput.disabled = false;
   elements.sendBtn.disabled = false;
 }
 
 function connectSocket(username) {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${protocol}://${window.location.host}/ws/direct/${username}`);
+  disconnectSocket();
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(`${protocol}://${location.host}/ws/chat/${username}`);
   state.socket = socket;
+
   setStatus(`Підключення до @${username}...`);
 
   socket.addEventListener("open", () => setStatus(`Чат з @${username} підключено`));
   socket.addEventListener("close", () => {
-    if (state.socket === socket) setStatus("З’єднання розірвано");
+    if (state.socket === socket) setStatus("З'єднання розірвано");
   });
 
   socket.addEventListener("message", event => {
@@ -360,7 +357,7 @@ async function submitAuth(path, formElement) {
 }
 
 async function handleFriendAdd(event) {
-  event.preventDefault();
+  if (event && event.preventDefault) event.preventDefault();
   const payload = { username: elements.friendUsername.value.trim() };
   if (!payload.username) return;
 
@@ -431,7 +428,10 @@ function bindEvents() {
     submitAuth("/api/auth/register", elements.registerForm);
   });
 
-  elements.friendForm.addEventListener("submit", handleFriendAdd);
+  if (elements.friendAddBtn) elements.friendAddBtn.addEventListener("click", handleFriendAdd);
+  elements.friendUsername.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); handleFriendAdd(e); }
+  });
   elements.logoutBtn.addEventListener("click", logout);
   elements.composerForm.addEventListener("submit", handleComposerSubmit);
   elements.composerInput.addEventListener("input", autoresizeComposer);
@@ -443,9 +443,21 @@ function bindEvents() {
     }
   });
 
-  elements.sidebarToggle.addEventListener("click", () => toggleSidebar());
-  elements.sidebarClose.addEventListener("click", () => toggleSidebar(false));
-  elements.sidebarOverlay.addEventListener("click", () => toggleSidebar(false));
+  elements.sidebarToggle.addEventListener("click", e => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleSidebar();
+  });
+
+  elements.sidebarClose.addEventListener("click", e => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleSidebar(false);
+  });
+
+  elements.sidebar.addEventListener("click", e => e.stopPropagation());
+  elements.sidebar.addEventListener("pointerdown", e => e.stopPropagation());
+  elements.sidebar.addEventListener("touchstart", e => e.stopPropagation(), { passive: true });
 
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && elements.sidebar.classList.contains("open")) toggleSidebar(false);
@@ -457,7 +469,6 @@ function bindEvents() {
 
   if (elements.themeBtn) elements.themeBtn.addEventListener("click", nextTheme);
   if (elements.themeBtnApp) elements.themeBtnApp.addEventListener("click", nextTheme);
-  if (elements.themeBtnDesktop) elements.themeBtnDesktop.addEventListener("click", nextTheme);
 }
 
 async function init() {
