@@ -43,17 +43,20 @@ class ConnectionManager:
     def connection_count(self, room_slug: str) -> int:
         return len(self._connections.get(room_slug, ()))
 
-    async def mark_online(self, user_id: int) -> None:
+    async def mark_online(self, user_id: int) -> bool:
         async with self._lock:
+            was_online = self._presence_counts[user_id] > 0
             self._presence_counts[user_id] += 1
+            return not was_online
 
-    async def mark_offline(self, user_id: int) -> None:
+    async def mark_offline(self, user_id: int) -> bool:
         async with self._lock:
             count = self._presence_counts.get(user_id, 0)
             if count <= 1:
                 self._presence_counts.pop(user_id, None)
-            else:
-                self._presence_counts[user_id] = count - 1
+                return count > 0
+            self._presence_counts[user_id] = count - 1
+            return False
 
     def is_online(self, user_id: int) -> bool:
         return self._presence_counts.get(user_id, 0) > 0

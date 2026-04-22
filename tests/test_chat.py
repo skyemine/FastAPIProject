@@ -152,6 +152,60 @@ def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
         assert history_response.json()[0]["content"] == "Hello Bob"
 
 
+def test_updates_socket_pushes_friend_requests_and_presence(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as alice_client:
+        register(alice_client, "alice_live", "Alice")
+
+    with TestClient(app) as bob_client:
+        register(bob_client, "bob_live", "Bob")
+
+    with TestClient(app) as bob_client:
+        login = bob_client.post("/api/auth/login", json={"username": "bob_live", "password": "Supersecure123"})
+        assert login.status_code == 200
+        with bob_client.websocket_connect("/ws/updates") as bob_updates:
+            ready = bob_updates.receive_json()
+            assert ready["type"] == "ready"
+
+            with TestClient(app) as alice_client:
+                login = alice_client.post("/api/auth/login", json={"username": "alice_live", "password": "Supersecure123"})
+                assert login.status_code == 200
+                send_request = alice_client.post("/api/friend-requests", json={"username": "bob_live"})
+                assert send_request.status_code == 201
+
+            request_update = bob_updates.receive_json()
+            assert request_update["type"] == "requests-changed"
+
+            requests_response = bob_client.get("/api/friend-requests")
+            request_id = requests_response.json()[0]["id"]
+            accept_response = bob_client.post(f"/api/friend-requests/{request_id}/accept")
+            assert accept_response.status_code == 200
+
+    with TestClient(app) as alice_client:
+        login = alice_client.post("/api/auth/login", json={"username": "alice_live", "password": "Supersecure123"})
+        assert login.status_code == 200
+        with alice_client.websocket_connect("/ws/updates") as alice_updates:
+            ready = alice_updates.receive_json()
+            assert ready["type"] == "ready"
+
+            with TestClient(app) as bob_client:
+                login = bob_client.post("/api/auth/login", json={"username": "bob_live", "password": "Supersecure123"})
+                assert login.status_code == 200
+                with bob_client.websocket_connect("/ws/updates") as bob_updates:
+                    ready = bob_updates.receive_json()
+                    assert ready["type"] == "ready"
+                    presence_online = alice_updates.receive_json()
+                    assert presence_online["type"] == "presence"
+                    assert presence_online["username"] == "bob_live"
+                    assert presence_online["is_online"] is True
+
+                presence_offline = alice_updates.receive_json()
+                assert presence_offline["type"] == "presence"
+                assert presence_offline["username"] == "bob_live"
+                assert presence_offline["is_online"] is False
+
+
 def test_rejects_weak_passwords(tmp_path) -> None:
     app = create_app(settings=build_settings(tmp_path))
 

@@ -100,6 +100,10 @@ def direct_channel_key(user_a: int, user_b: int) -> str:
     return f"dm:{ordered[0]}:{ordered[1]}"
 
 
+def updates_channel_key(user_id: int) -> str:
+    return f"user:{user_id}"
+
+
 def normalize_username(value: str) -> str:
     normalized = USERNAME_PATTERN.sub("", value.strip().lower())
     if len(normalized) < 3:
@@ -515,6 +519,57 @@ def list_friend_requests(session: Session, current_user_id: int) -> list[FriendR
     return [friend_request_to_schema(item) for item in incoming]
 
 
+def list_friend_identities(session: Session, current_user_id: int) -> list[UserIdentity]:
+    friend_alias = aliased(User)
+    friends = session.execute(
+        select(friend_alias)
+        .join(Friendship, Friendship.friend_id == friend_alias.id)
+        .where(Friendship.user_id == current_user_id)
+    ).scalars()
+    return [user_to_identity(friend) for friend in friends]
+
+
+async def broadcast_to_user(manager: ConnectionManager, user_id: int, payload: dict) -> None:
+    await manager.broadcast(updates_channel_key(user_id), payload)
+
+
+async def broadcast_presence_to_friends(
+    database: Database,
+    manager: ConnectionManager,
+    current_identity: UserIdentity,
+    is_online: bool,
+) -> None:
+    friends = await asyncio.to_thread(
+        run_with_session,
+        database,
+        lambda session: list_friend_identities(session, current_identity.id),
+    )
+    payload = {
+        "type": "presence",
+        "user_id": current_identity.id,
+        "username": current_identity.username,
+        "display_name": current_identity.display_name,
+        "avatar_url": avatar_url_for(current_identity),
+        "is_online": is_online,
+    }
+    for friend in friends:
+        await broadcast_to_user(manager, friend.id, payload)
+
+
+async def broadcast_friends_changed_to_contacts(
+    database: Database,
+    manager: ConnectionManager,
+    current_user_id: int,
+) -> None:
+    friends = await asyncio.to_thread(
+        run_with_session,
+        database,
+        lambda session: list_friend_identities(session, current_user_id),
+    )
+    for friend in friends:
+        await broadcast_to_user(manager, friend.id, {"type": "friends-changed"})
+
+
 def search_users(session: Session, current_user_id: int, query: str, manager: ConnectionManager) -> list[UserSearchRead]:
     normalized = normalize_username(query)
     users = session.scalars(
@@ -880,6 +935,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     database = Database(resolved_settings.database_url)
     session_manager = SessionManager(resolved_settings.secret_key)
     manager = ConnectionManager()
+    updates_manager = ConnectionManager()
     static_dir = Path(__file__).resolve().parent / "static"
 
     @asynccontextmanager
@@ -1019,13 +1075,14 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         return response
 
     @app.patch("/api/users/me", response_model=UserRead)
-    def update_current_user(payload: ProfileUpdateRequest, request: Request, response: Response) -> UserRead:
+    async def update_current_user(payload: ProfileUpdateRequest, request: Request, response: Response) -> UserRead:
         response.headers["Cache-Control"] = "no-store"
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
         updated_user = run_with_session(database, lambda session: update_profile(session, identity.id, payload))
         refreshed_identity = run_with_session(database, lambda session: load_identity(session, identity.id))
         if refreshed_identity is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User was not found.")
+        asyncio.create_task(broadcast_friends_changed_to_contacts(database, updates_manager, identity.id))
         return updated_user
 
     @app.post("/api/users/me/avatar", response_model=UserRead)
@@ -1050,10 +1107,12 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
                 destination.write(chunk)
 
         mime_type = validate_avatar_upload(file, size)
-        return run_with_session(
+        updated_user = run_with_session(
             database,
             lambda session: save_or_update_avatar(session, identity.id, safe_name, str(stored_path), mime_type),
         )
+        asyncio.create_task(broadcast_friends_changed_to_contacts(database, updates_manager, identity.id))
+        return updated_user
 
     @app.get("/api/avatars/{avatar_token}")
     def download_avatar(avatar_token: str, request: Request) -> FileResponse:
@@ -1074,7 +1133,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     @app.get("/api/friends", response_model=list[FriendRead])
     def read_friends(request: Request) -> list[FriendRead]:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
-        return run_with_session(database, lambda session: list_friends(session, identity.id, manager))
+        return run_with_session(database, lambda session: list_friends(session, identity.id, updates_manager))
 
     @app.get("/api/friend-requests", response_model=list[FriendRequestRead])
     def read_friend_requests(request: Request) -> list[FriendRequestRead]:
@@ -1100,22 +1159,32 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
         if not query.strip():
             return []
-        return run_with_session(database, lambda session: search_users(session, identity.id, query, manager))
+        return run_with_session(database, lambda session: search_users(session, identity.id, query, updates_manager))
 
     @app.post("/api/friend-requests", response_model=FriendRequestRead, status_code=status.HTTP_201_CREATED)
-    def send_friend_request(payload: FriendRequestCreate, request: Request) -> FriendRequestRead:
+    async def send_friend_request(payload: FriendRequestCreate, request: Request) -> FriendRequestRead:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
-        return run_with_session(database, lambda session: create_friend_request(session, identity.id, payload.username))
+        friend_request = run_with_session(database, lambda session: create_friend_request(session, identity.id, payload.username))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.addressee.id, {"type": "requests-changed"}))
+        return friend_request
 
     @app.post("/api/friend-requests/{request_id}/accept", response_model=FriendRequestRead)
-    def accept_friend_request(request_id: int, request: Request) -> FriendRequestRead:
+    async def accept_friend_request(request_id: int, request: Request) -> FriendRequestRead:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
-        return run_with_session(database, lambda session: respond_to_friend_request(session, request_id, identity.id, True))
+        friend_request = run_with_session(database, lambda session: respond_to_friend_request(session, request_id, identity.id, True))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.requester.id, {"type": "friends-changed"}))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.addressee.id, {"type": "friends-changed"}))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.requester.id, {"type": "requests-changed"}))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.addressee.id, {"type": "requests-changed"}))
+        return friend_request
 
     @app.post("/api/friend-requests/{request_id}/reject", response_model=FriendRequestRead)
-    def reject_friend_request(request_id: int, request: Request) -> FriendRequestRead:
+    async def reject_friend_request(request_id: int, request: Request) -> FriendRequestRead:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
-        return run_with_session(database, lambda session: respond_to_friend_request(session, request_id, identity.id, False))
+        friend_request = run_with_session(database, lambda session: respond_to_friend_request(session, request_id, identity.id, False))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.requester.id, {"type": "requests-changed"}))
+        asyncio.create_task(broadcast_to_user(updates_manager, friend_request.addressee.id, {"type": "requests-changed"}))
+        return friend_request
 
     @app.get("/api/direct/{friend_username}/messages", response_model=list[DirectMessageRead])
     def read_direct_messages(friend_username: str, request: Request) -> list[DirectMessageRead]:
@@ -1201,6 +1270,40 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File content is missing.")
         return FileResponse(file_path, filename=message.attachment_name or file_path.name, media_type=message.attachment_mime_type)
 
+    @app.websocket("/ws/updates")
+    async def updates_socket(websocket: WebSocket) -> None:
+        try:
+            identity = current_identity_from_websocket(websocket, database, session_manager, resolved_settings)
+        except HTTPException as exc:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=exc.detail)
+            return
+
+        if resolved_settings.allowed_origins:
+            origin = websocket.headers.get("origin")
+            if origin and origin not in resolved_settings.allowed_origins:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Origin is not allowed.")
+                return
+
+        channel = updates_channel_key(identity.id)
+        became_online = await updates_manager.mark_online(identity.id)
+        await updates_manager.connect(channel, websocket)
+        if became_online:
+            asyncio.create_task(broadcast_presence_to_friends(database, updates_manager, identity, True))
+
+        try:
+            await websocket.send_json({"type": "ready"})
+            while True:
+                raw_payload = await websocket.receive_text()
+                if raw_payload.strip().lower() == "ping":
+                    await websocket.send_json({"type": "pong"})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await updates_manager.disconnect(channel, websocket)
+            became_offline = await updates_manager.mark_offline(identity.id)
+            if became_offline:
+                asyncio.create_task(broadcast_presence_to_friends(database, updates_manager, identity, False))
+
     @app.websocket("/ws/direct/{friend_username}")
     async def direct_socket(websocket: WebSocket, friend_username: str) -> None:
         try:
@@ -1231,7 +1334,6 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
             return
 
         channel = direct_channel_key(identity.id, target_identity.id)
-        await manager.mark_online(identity.id)
         await manager.connect(channel, websocket)
         try:
             await websocket.send_json(
@@ -1242,7 +1344,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
                         "display_name": target_identity.display_name,
                         "initials": initials_for_name(target_identity.display_name),
                         "avatar_url": avatar_url_for(target_identity),
-                        "is_online": manager.is_online(target_identity.id),
+                        "is_online": updates_manager.is_online(target_identity.id),
                     },
                     "messages": [item.model_dump(mode="json") for item in history],
                 }
@@ -1304,7 +1406,8 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
                         )
                     )
         except WebSocketDisconnect:
+            pass
+        finally:
             await manager.disconnect(channel, websocket)
-            await manager.mark_offline(identity.id)
 
     return app

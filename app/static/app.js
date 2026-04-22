@@ -6,12 +6,19 @@ const state = {
   pendingChatUsername: new URLSearchParams(window.location.search).get("chat"),
   messagesByFriend: new Map(),
   socket: null,
+  updatesSocket: null,
   serviceWorkerRegistration: null,
   socketMeta: {
     friendUsername: null,
     intentionalClose: false,
     reconnectTimer: null,
     reconnectAttempts: 0,
+  },
+  updatesMeta: {
+    intentionalClose: false,
+    reconnectTimer: null,
+    reconnectAttempts: 0,
+    heartbeatTimer: null,
   },
   viewerObjectUrl: null,
   theme: localStorage.getItem("prism-theme") || "light",
@@ -246,6 +253,20 @@ function clearReconnectTimer() {
   }
 }
 
+function clearUpdatesReconnectTimer() {
+  if (state.updatesMeta.reconnectTimer) {
+    window.clearTimeout(state.updatesMeta.reconnectTimer);
+    state.updatesMeta.reconnectTimer = null;
+  }
+}
+
+function clearUpdatesHeartbeat() {
+  if (state.updatesMeta.heartbeatTimer) {
+    window.clearInterval(state.updatesMeta.heartbeatTimer);
+    state.updatesMeta.heartbeatTimer = null;
+  }
+}
+
 function parseServerDate(value) {
   if (!value) return null;
   const normalized = /\dZ$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`;
@@ -357,11 +378,13 @@ function setAuthenticatedSession(user) {
 
 function resetConversationState() {
   clearReconnectTimer();
+  clearUpdatesReconnectTimer();
   state.friends = [];
   state.requests = [];
   state.activeFriend = null;
   state.messagesByFriend.clear();
   disconnectSocket();
+  disconnectUpdatesSocket();
   teardownCall(false);
   renderFriends();
   renderRequests();
@@ -701,6 +724,37 @@ function disconnectSocket() {
   state.socketMeta.reconnectAttempts = 0;
 }
 
+function disconnectUpdatesSocket() {
+  clearUpdatesReconnectTimer();
+  clearUpdatesHeartbeat();
+  if (state.updatesSocket) {
+    state.updatesMeta.intentionalClose = true;
+    state.updatesSocket.close();
+    state.updatesSocket = null;
+  }
+  state.updatesMeta.reconnectAttempts = 0;
+}
+
+function scheduleUpdatesReconnect() {
+  if (!state.session?.authenticated) return;
+  clearUpdatesReconnectTimer();
+  const delay = Math.min(4000, 600 + state.updatesMeta.reconnectAttempts * 500);
+  state.updatesMeta.reconnectAttempts += 1;
+  state.updatesMeta.reconnectTimer = window.setTimeout(() => {
+    if (state.session?.authenticated) {
+      connectUpdatesSocket({ reconnecting: true });
+    }
+  }, delay);
+}
+
+function safeLoadFriends() {
+  return loadFriends().catch(() => null);
+}
+
+function safeLoadRequests() {
+  return loadRequests().catch(() => null);
+}
+
 function scheduleReconnect(username) {
   if (!state.session?.authenticated || state.activeFriend !== username) return;
   clearReconnectTimer();
@@ -824,6 +878,76 @@ async function handleSignal(payload) {
   }
 }
 
+function handleUpdatesEvent(payload) {
+  if (!payload || typeof payload !== "object") return;
+
+  if (payload.type === "presence" && payload.username) {
+    const friend = state.friends.find((item) => item.username === payload.username);
+    if (!friend) return;
+    friend.is_online = Boolean(payload.is_online);
+    if (payload.avatar_url) friend.avatar_url = payload.avatar_url;
+    if (payload.display_name) friend.display_name = payload.display_name;
+    renderFriends();
+    updateActiveFriendMeta();
+    return;
+  }
+
+  if (payload.type === "friends-changed") {
+    safeLoadFriends();
+    return;
+  }
+
+  if (payload.type === "requests-changed") {
+    safeLoadRequests();
+  }
+}
+
+function connectUpdatesSocket(options = {}) {
+  disconnectUpdatesSocket();
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(`${protocol}://${window.location.host}/ws/updates`);
+  state.updatesSocket = socket;
+  state.updatesMeta.intentionalClose = false;
+
+  socket.addEventListener("open", () => {
+    clearUpdatesReconnectTimer();
+    clearUpdatesHeartbeat();
+    state.updatesMeta.reconnectAttempts = 0;
+    state.updatesMeta.heartbeatTimer = window.setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send("ping");
+      }
+    }, 25000);
+  });
+
+  socket.addEventListener("close", () => {
+    const closedIntentionally = state.updatesMeta.intentionalClose;
+    if (state.updatesSocket === socket) {
+      clearUpdatesHeartbeat();
+      state.updatesSocket = null;
+      if (!closedIntentionally) {
+        scheduleUpdatesReconnect();
+      }
+    }
+  });
+
+  socket.addEventListener("error", () => {
+    if (!options.reconnecting) {
+      setStatus("Realtime updates are reconnecting...");
+    }
+  });
+
+  socket.addEventListener("message", (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    handleUpdatesEvent(payload);
+  });
+}
+
 function connectSocket(username, options = {}) {
   disconnectSocket();
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -884,7 +1008,7 @@ function connectSocket(username, options = {}) {
       state.messagesByFriend.set(username, list);
       notifyIncomingMessage(payload.message);
       renderMessages();
-      loadFriends();
+      safeLoadFriends();
       return;
     }
 
@@ -950,6 +1074,7 @@ async function refreshSession() {
   }
 
   setAuthenticatedSession(session.user);
+  connectUpdatesSocket();
   await maybeEnableNotifications();
   await ensurePushSubscription();
   await Promise.all([loadFriends(), loadRequests()]);
@@ -970,6 +1095,7 @@ async function submitAuth(path, formElement) {
     if (elements.authError) elements.authError.textContent = "";
     formElement.reset();
     setAuthenticatedSession(user);
+    connectUpdatesSocket();
     await maybeEnableNotifications();
     await ensurePushSubscription();
     await Promise.all([loadFriends(), loadRequests()]);
