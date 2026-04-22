@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import and_, inspect as sa_inspect, or_, select
+from sqlalchemy import and_, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import Session, aliased, selectinload
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -53,6 +53,7 @@ import secrets
 T = TypeVar("T")
 USERNAME_PATTERN = re.compile(r"[^a-z0-9_]+")
 MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024
+MAX_AVATAR_SIZE = 5 * 1024 * 1024
 INLINE_ATTACHMENT_TYPES = {
     "image/jpeg",
     "image/gif",
@@ -72,6 +73,7 @@ INLINE_ATTACHMENT_TYPES = {
     "application/zip",
     "application/x-zip-compressed",
 }
+ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
 @dataclass(slots=True)
@@ -79,6 +81,7 @@ class UserIdentity:
     id: int
     username: str
     display_name: str
+    avatar_token: str | None
     created_at: str
 
 
@@ -120,8 +123,16 @@ def user_to_identity(user: User) -> UserIdentity:
         id=user.id,
         username=user.username,
         display_name=user.display_name,
+        avatar_token=user.avatar_token,
         created_at=user.created_at.isoformat(),
     )
+
+
+def avatar_url_for(user: User | UserIdentity) -> str | None:
+    token = getattr(user, "avatar_token", None)
+    if not token:
+        return None
+    return f"/api/avatars/{token}"
 
 
 def normalize_datetime(value: datetime) -> datetime:
@@ -136,6 +147,7 @@ def identity_to_user_schema(identity: UserIdentity) -> UserRead:
         username=identity.username,
         display_name=identity.display_name,
         initials=initials_for_name(identity.display_name),
+        avatar_url=avatar_url_for(identity),
         created_at=parse_isoformat(identity.created_at),
     )
 
@@ -146,6 +158,7 @@ def user_to_schema(user: User) -> UserRead:
         username=user.username,
         display_name=user.display_name,
         initials=initials_for_name(user.display_name),
+        avatar_url=avatar_url_for(user),
         created_at=normalize_datetime(user.created_at),
     )
 
@@ -313,6 +326,7 @@ def search_users(session: Session, current_user_id: int, query: str, manager: Co
                 username=user.username,
                 display_name=user.display_name,
                 initials=initials_for_name(user.display_name),
+                avatar_url=avatar_url_for(user),
                 is_friend=friendship,
                 request_state=request_state,
                 is_online=manager.is_online(user.id),
@@ -349,6 +363,7 @@ def list_friends(session: Session, current_user_id: int, manager: ConnectionMana
                 username=friend.username,
                 display_name=friend.display_name,
                 initials=initials_for_name(friend.display_name),
+                avatar_url=avatar_url_for(friend),
                 is_online=manager.is_online(friend.id),
                 last_message=last_message.content if last_message else None,
                 last_message_at=last_message.sent_at if last_message else None,
@@ -446,6 +461,44 @@ def validate_upload(file: UploadFile, file_size: int) -> None:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="File type is not allowed.")
 
 
+def validate_avatar_upload(file: UploadFile, file_size: int) -> str:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Avatar file name is missing.")
+    if file_size <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Avatar file is empty.")
+    if file_size > MAX_AVATAR_SIZE:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Avatar is too large.")
+    mime_type = (file.content_type or "application/octet-stream").lower()
+    if mime_type not in ALLOWED_AVATAR_TYPES:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Avatar type is not allowed.")
+    return mime_type
+
+
+def save_or_update_avatar(
+    session: Session,
+    current_user_id: int,
+    file_name: str,
+    stored_path: str,
+    mime_type: str,
+) -> UserRead:
+    user = session.get(User, current_user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User session is invalid.")
+
+    old_path = user.avatar_path
+    user.avatar_name = file_name
+    user.avatar_path = stored_path
+    user.avatar_mime_type = mime_type
+    user.avatar_token = user.avatar_token or secrets.token_urlsafe(24)
+    session.commit()
+    session.refresh(user)
+
+    if old_path and old_path != stored_path:
+        Path(old_path).unlink(missing_ok=True)
+
+    return user_to_schema(user)
+
+
 def ensure_sqlite_schema_compatibility(database: Database) -> None:
     if database.engine.url.get_backend_name() != "sqlite":
         return
@@ -462,17 +515,47 @@ def ensure_sqlite_schema_compatibility(database: Database) -> None:
     required_tables = {"users", "friend_requests", "friendships", "direct_messages"}
     existing_tables = set(inspector.get_table_names())
     direct_message_columns = {column["name"] for column in inspector.get_columns("direct_messages")} if "direct_messages" in existing_tables else set()
+    user_columns = {column["name"] for column in inspector.get_columns("users")} if "users" in existing_tables else set()
     required_columns = {"attachment_name", "attachment_path", "attachment_size", "attachment_mime_type", "attachment_token"}
+    required_user_columns = {"avatar_name", "avatar_path", "avatar_mime_type", "avatar_token"}
 
-    if required_tables.issubset(existing_tables) and required_columns.issubset(direct_message_columns):
+    if not required_tables.issubset(existing_tables):
         return
 
-    backup_path = path.with_suffix(f".backup-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}{path.suffix}")
-    database.engine.dispose()
-    path.replace(backup_path)
+    alter_statements: list[str] = []
+    if "attachment_name" not in direct_message_columns:
+        alter_statements.append("ALTER TABLE direct_messages ADD COLUMN attachment_name VARCHAR(255)")
+    if "attachment_path" not in direct_message_columns:
+        alter_statements.append("ALTER TABLE direct_messages ADD COLUMN attachment_path VARCHAR(255)")
+    if "attachment_size" not in direct_message_columns:
+        alter_statements.append("ALTER TABLE direct_messages ADD COLUMN attachment_size INTEGER")
+    if "attachment_mime_type" not in direct_message_columns:
+        alter_statements.append("ALTER TABLE direct_messages ADD COLUMN attachment_mime_type VARCHAR(120)")
+    if "attachment_token" not in direct_message_columns:
+        alter_statements.append("ALTER TABLE direct_messages ADD COLUMN attachment_token VARCHAR(64)")
+    if "avatar_name" not in user_columns:
+        alter_statements.append("ALTER TABLE users ADD COLUMN avatar_name VARCHAR(255)")
+    if "avatar_path" not in user_columns:
+        alter_statements.append("ALTER TABLE users ADD COLUMN avatar_path VARCHAR(255)")
+    if "avatar_mime_type" not in user_columns:
+        alter_statements.append("ALTER TABLE users ADD COLUMN avatar_mime_type VARCHAR(120)")
+    if "avatar_token" not in user_columns:
+        alter_statements.append("ALTER TABLE users ADD COLUMN avatar_token VARCHAR(64)")
+
+    if not alter_statements and required_columns.issubset(direct_message_columns) and required_user_columns.issubset(user_columns):
+        return
+
+    with database.engine.begin() as connection:
+        for statement in alter_statements:
+            connection.execute(text(statement))
+        if "attachment_token" not in direct_message_columns:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_direct_messages_attachment_token ON direct_messages (attachment_token)"))
+        if "avatar_token" not in user_columns:
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_avatar_token ON users (avatar_token)"))
 
 
 def issue_session_cookie(response: Response, session_manager: SessionManager, settings: Settings, user: UserIdentity) -> None:
+    expires_at = datetime.now(timezone.utc).timestamp() + settings.session_max_age_seconds
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_manager.issue_token(user.id),
@@ -480,6 +563,7 @@ def issue_session_cookie(response: Response, session_manager: SessionManager, se
         samesite="strict",
         secure=settings.cookie_secure,
         max_age=settings.session_max_age_seconds,
+        expires=expires_at,
         path="/",
     )
 
@@ -616,6 +700,49 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     def logout(response: Response) -> Response:
         clear_session_cookie(response, resolved_settings)
         return response
+
+    @app.post("/api/users/me/avatar", response_model=UserRead)
+    async def upload_avatar(request: Request, file: UploadFile = File(...)) -> UserRead:
+        identity = current_identity_from_request(request, database, session_manager, resolved_settings)
+        avatars_dir = Path("uploads") / "avatars"
+        avatars_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_name = Path(file.filename or "avatar.bin").name
+        suffix = Path(safe_name).suffix or ".bin"
+        stored_name = f"{identity.id}-{secrets.token_hex(12)}{suffix}"
+        stored_path = avatars_dir / stored_name
+
+        size = 0
+        with stored_path.open("wb") as destination:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_AVATAR_SIZE:
+                    destination.close()
+                    stored_path.unlink(missing_ok=True)
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Avatar is too large.")
+                destination.write(chunk)
+
+        mime_type = validate_avatar_upload(file, size)
+        return run_with_session(
+            database,
+            lambda session: save_or_update_avatar(session, identity.id, safe_name, str(stored_path), mime_type),
+        )
+
+    @app.get("/api/avatars/{avatar_token}")
+    def download_avatar(avatar_token: str, request: Request) -> FileResponse:
+        current_identity_from_request(request, database, session_manager, resolved_settings)
+
+        def load_avatar(session: Session) -> User:
+            user = session.scalar(select(User).where(User.avatar_token == avatar_token))
+            if user is None or not user.avatar_path:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found.")
+            return user
+
+        user = run_with_session(database, load_avatar)
+        file_path = Path(user.avatar_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar content is missing.")
+        return FileResponse(file_path, filename=user.avatar_name or file_path.name, media_type=user.avatar_mime_type)
 
     @app.get("/api/friends", response_model=list[FriendRead])
     def read_friends(request: Request) -> list[FriendRead]:
@@ -763,6 +890,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
                         "username": target_identity.username,
                         "display_name": target_identity.display_name,
                         "initials": initials_for_name(target_identity.display_name),
+                        "avatar_url": avatar_url_for(target_identity),
                         "is_online": manager.is_online(target_identity.id),
                     },
                     "messages": [item.model_dump(mode="json") for item in history],

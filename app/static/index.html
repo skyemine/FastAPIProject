@@ -1,170 +1,164 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="uk" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#f5f7fb" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#ffffff" />
   <title>Prism</title>
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>
-  <div class="ambient-bg" aria-hidden="true">
-    <div class="ambient-shape shape-a"></div>
-    <div class="ambient-shape shape-b"></div>
-    <div class="ambient-grid"></div>
+  <div class="glow-background" aria-hidden="true">
+    <div class="glow-orb blue"></div>
+    <div class="glow-orb green"></div>
   </div>
 
   <div class="auth-shell" id="auth-shell">
-    <div class="auth-card surface-card">
-      <header class="auth-header">
-        <div>
-          <div class="eyebrow">Private Messenger</div>
-          <h1>Prism</h1>
-          <p>Direct chats, friend requests, and private file sharing.</p>
-        </div>
-        <button class="icon-btn" id="theme-btn" type="button" aria-label="Toggle theme">Theme</button>
+    <div class="auth-card">
+      <header class="topbar">
+        <div class="brand">Prism</div>
+        <button class="topbtn" id="theme-btn" type="button">Theme</button>
       </header>
 
-      <div class="auth-tabs" role="tablist" aria-label="Authentication">
-        <button class="tab active" id="tab-login" role="tab" aria-selected="true" type="button">Login</button>
-        <button class="tab" id="tab-register" role="tab" aria-selected="false" type="button">Register</button>
+      <div class="auth-tabs" role="tablist" aria-label="Авторизація">
+        <button class="tab active" id="tab-login" role="tab" aria-selected="true" type="button">Увійти</button>
+        <button class="tab" id="tab-register" role="tab" aria-selected="false" type="button">Реєстрація</button>
       </div>
 
       <form class="auth-form active" id="login-form" autocomplete="on">
         <label class="field">
-          <span>Username</span>
+          <span>Логін</span>
           <input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" />
         </label>
+
         <label class="field">
-          <span>Password</span>
+          <span>Пароль</span>
           <input name="password" type="password" required autocomplete="current-password" />
         </label>
-        <button class="primary-btn" type="submit">Open chats</button>
+
+        <button class="primary" type="submit">Відкрити чати</button>
       </form>
 
       <form class="auth-form" id="register-form" autocomplete="on">
         <label class="field">
-          <span>Username</span>
+          <span>Логін</span>
           <input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" />
         </label>
+
         <label class="field">
-          <span>Display name</span>
+          <span>Ім'я</span>
           <input name="display_name" autocomplete="name" />
         </label>
+
         <label class="field">
-          <span>Password</span>
+          <span>Пароль</span>
           <input name="password" type="password" required autocomplete="new-password" />
         </label>
-        <button class="primary-btn" type="submit">Create account</button>
+
+        <button class="primary" type="submit">Створити акаунт</button>
       </form>
 
       <p class="auth-error" id="auth-error" aria-live="polite"></p>
     </div>
   </div>
 
-  <button class="sidebar-toggle hidden" id="sidebar-toggle" type="button" aria-label="Toggle contacts" aria-expanded="false">
-    <span></span>
-    <span></span>
-    <span></span>
+  <button class="fab-menu hidden" id="sidebar-toggle" aria-label="Меню" aria-expanded="false" type="button">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <line x1="3" y1="6" x2="21" y2="6" stroke-width="2" stroke-linecap="round"></line>
+      <line x1="3" y1="12" x2="21" y2="12" stroke-width="2" stroke-linecap="round"></line>
+      <line x1="3" y1="18" x2="21" y2="18" stroke-width="2" stroke-linecap="round"></line>
+    </svg>
   </button>
 
   <div class="app-shell hidden" id="app-shell">
-    <aside class="sidebar surface-card" id="sidebar" aria-label="Contacts">
-      <header class="sidebar-header">
-        <div>
-          <div class="eyebrow">Workspace</div>
-          <div class="sidebar-brand">Prism</div>
-        </div>
-        <div class="header-actions">
-          <button class="icon-btn" id="theme-btn-app" type="button">Theme</button>
-          <button class="icon-btn" id="sidebar-close" type="button" aria-label="Close contacts">Close</button>
+    <aside class="sidebar" id="sidebar" aria-label="Бічна панель">
+      <header class="sidebar-top">
+        <div class="brand">Prism</div>
+        <div class="side-actions">
+          <button class="topbtn" id="theme-btn-app" type="button">Theme</button>
+          <button class="topbtn" id="sidebar-close" type="button" aria-label="Закрити">x</button>
         </div>
       </header>
 
-      <section class="profile-card">
-        <div class="avatar avatar-lg" id="user-avatar">?</div>
-        <div class="profile-meta">
-          <div class="profile-name" id="user-name">Guest</div>
-          <div class="profile-handle" id="user-handle">@guest</div>
+      <section class="me">
+        <div class="avatar avatar-button" id="user-avatar">?</div>
+        <input id="avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        <div class="me-meta">
+          <div class="me-name" id="user-name">Гість</div>
+          <div class="me-handle" id="user-handle">@guest</div>
         </div>
-        <button class="ghost-btn" id="logout-btn" type="button">Sign out</button>
+        <div class="me-actions">
+          <button class="topbtn" id="avatar-btn" type="button">Аватарка</button>
+          <button class="topbtn" id="logout-btn" type="button">Вийти</button>
+        </div>
       </section>
 
-      <section class="sidebar-section">
-        <div class="section-header">
-          <div>
-            <div class="section-title">Add friend</div>
-            <div class="section-subtitle">Send a request by username.</div>
-          </div>
-        </div>
-        <form class="search-bar" id="friend-form" autocomplete="off">
+      <section class="panel">
+        <div class="panel-title">Додати друга</div>
+        <form class="pill" id="friend-form" autocomplete="off">
           <input id="friend-username" placeholder="username" autocapitalize="none" spellcheck="false" />
-          <button class="primary-btn compact" type="submit">Send</button>
+          <button class="pill-btn" type="submit" aria-label="Додати">+</button>
         </form>
       </section>
 
-      <section class="sidebar-section">
-        <div class="section-header">
-          <div class="section-title">Requests</div>
-          <div class="section-count" id="requests-count">0</div>
-        </div>
-        <div class="list-stack" id="requests-list"></div>
+      <section class="panel">
+        <div class="panel-title">Запити</div>
+        <div class="list" id="requests-list"></div>
       </section>
 
-      <section class="sidebar-section grow">
-        <div class="section-header">
-          <div class="section-title">Friends</div>
-          <div class="section-count" id="friends-count">0</div>
-        </div>
-        <div class="list-stack" id="friends-list"></div>
+      <section class="panel">
+        <div class="panel-title">Друзі</div>
+        <div class="list" id="friends-list"></div>
       </section>
     </aside>
 
-    <main class="chat-shell">
-      <header class="chat-header surface-card">
-        <div class="chat-user">
-          <div class="avatar avatar-lg" id="chat-avatar">DM</div>
-          <div class="chat-user-meta">
-            <div class="chat-title" id="chat-title">Select a friend</div>
-            <div class="chat-subtitle" id="chat-subtitle">Accept a request or choose a person from the list.</div>
+    <main class="chat">
+      <header class="chat-top">
+        <div class="chat-person">
+          <div class="avatar" id="chat-avatar">DM</div>
+          <div class="chat-meta">
+            <div class="chat-title" id="chat-title">Виберіть друга</div>
+            <div class="chat-sub" id="chat-subtitle">Прийміть запит або виберіть друга зі списку.</div>
           </div>
         </div>
-        <div class="chat-badges">
-          <span class="status-pill" id="chat-status">Offline</span>
+        <div class="chat-right">
+          <span class="status" id="chat-status">Офлайн</span>
         </div>
       </header>
 
       <section class="messages-area" id="message-stream" aria-live="polite"></section>
 
-      <footer class="composer-shell surface-card">
-        <form class="composer" id="composer-form" autocomplete="off">
+      <footer class="input-area">
+        <form class="input-wrapper" id="composer-form" autocomplete="off">
           <input id="file-input" type="file" hidden />
-          <button class="ghost-icon" id="file-btn" type="button" disabled aria-label="Send file">+</button>
-          <textarea id="composer-input" rows="1" maxlength="2000" placeholder="Write a message..." disabled></textarea>
-          <button class="primary-icon" id="send-btn" type="submit" disabled aria-label="Send message">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
+          <button class="send-btn secondary" id="file-btn" type="button" disabled aria-label="Надіслати файл">+</button>
+          <textarea id="composer-input" rows="1" maxlength="2000" placeholder="Повідомлення..." disabled></textarea>
+          <button class="send-btn" id="send-btn" type="submit" disabled aria-label="Надіслати">
+            <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 12h14M12 5l7 7-7 7"></path>
             </svg>
           </button>
         </form>
-        <div class="status-line" id="status-line">No chat selected</div>
+        <div class="status-line" id="status-line">Чат не вибрано</div>
       </footer>
     </main>
   </div>
 
   <dialog class="viewer" id="viewer-modal">
-    <div class="viewer-card surface-card">
-      <header class="viewer-header">
+    <div class="viewer-card">
+      <header class="topbar viewer-topbar">
         <div>
-          <div class="eyebrow">Attachment viewer</div>
-          <div class="viewer-title" id="viewer-title">Attachment</div>
+          <div class="brand" id="viewer-title">Файл</div>
+          <div class="viewer-meta" id="viewer-meta"></div>
         </div>
-        <div class="header-actions">
-          <a class="ghost-btn" id="viewer-download" href="#" target="_blank" rel="noreferrer">Open file</a>
-          <button class="icon-btn" id="viewer-close" type="button">Close</button>
+        <div class="side-actions">
+          <a class="topbtn" id="viewer-download" href="#" target="_blank" rel="noreferrer">Відкрити</a>
+          <button class="topbtn" id="viewer-close" type="button">x</button>
         </div>
       </header>
-      <div class="viewer-meta" id="viewer-meta"></div>
       <div class="viewer-body" id="viewer-body"></div>
     </div>
   </dialog>

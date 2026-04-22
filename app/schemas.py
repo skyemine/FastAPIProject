@@ -16,6 +16,7 @@ class UserRead(BaseModel):
     username: str
     display_name: str
     initials: str
+    avatar_url: str | None = None
     created_at: datetime
 
 
@@ -23,6 +24,7 @@ class UserSearchRead(BaseModel):
     username: str
     display_name: str
     initials: str
+    avatar_url: str | None = None
     is_friend: bool
     request_state: str
     is_online: bool
@@ -51,6 +53,7 @@ class FriendRead(BaseModel):
     username: str
     display_name: str
     initials: str
+    avatar_url: str | None = None
     is_online: bool
     last_message: str | None
     last_message_at: datetime | None

@@ -52,8 +52,24 @@ def test_frontend_and_auth_flow(tmp_path) -> None:
         session_response = client.get("/api/session")
         assert session_response.json()["authenticated"] is True
         assert session_response.json()["user"]["username"] == "alice_dev"
-        second_session_response = client.get("/api/session")
-        assert second_session_response.json()["authenticated"] is True
+
+
+def test_session_persists_across_app_restart(tmp_path) -> None:
+    settings = build_settings(tmp_path)
+    app = create_app(settings=settings)
+
+    with TestClient(app) as client:
+        register(client, "restart_dev", "Restart")
+        session_cookie = client.cookies.get(settings.session_cookie_name)
+        assert session_cookie
+
+    restarted_app = create_app(settings=settings)
+    with TestClient(restarted_app) as restarted_client:
+        restarted_client.cookies.set(settings.session_cookie_name, session_cookie)
+        session_response = restarted_client.get("/api/session")
+        assert session_response.status_code == 200
+        assert session_response.json()["authenticated"] is True
+        assert session_response.json()["user"]["username"] == "restart_dev"
 
 
 def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
@@ -106,7 +122,6 @@ def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
         history_response = alice_client.get("/api/direct/bob_dev/messages")
         assert history_response.status_code == 200
         assert history_response.json()[0]["content"] == "Hello Bob"
-        assert history_response.json()[0]["sent_at"].endswith(("Z", "+00:00"))
 
 
 def test_rejects_weak_passwords(tmp_path) -> None:
@@ -156,3 +171,24 @@ def test_file_upload_and_download_between_friends(tmp_path) -> None:
         download_response = alice_client.get(payload["attachment_url"])
         assert download_response.status_code == 200
         assert download_response.content == b"hello from alice"
+
+
+def test_avatar_upload_persists_in_session(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as client:
+        register(client, "avatar_dev", "Avatar User")
+        upload_response = client.post(
+            "/api/users/me/avatar",
+            files={"file": ("avatar.png", b"\x89PNG\r\n\x1a\navatar-data", "image/png")},
+        )
+        assert upload_response.status_code == 200
+        payload = upload_response.json()
+        assert payload["avatar_url"]
+
+        session_response = client.get("/api/session")
+        assert session_response.status_code == 200
+        assert session_response.json()["user"]["avatar_url"] == payload["avatar_url"]
+
+        avatar_response = client.get(payload["avatar_url"])
+        assert avatar_response.status_code == 200

@@ -23,9 +23,7 @@ const elements = {
   friendForm: document.getElementById("friend-form"),
   friendUsername: document.getElementById("friend-username"),
   requestsList: document.getElementById("requests-list"),
-  requestsCount: document.getElementById("requests-count"),
   friendsList: document.getElementById("friends-list"),
-  friendsCount: document.getElementById("friends-count"),
   messageStream: document.getElementById("message-stream"),
   composerForm: document.getElementById("composer-form"),
   composerInput: document.getElementById("composer-input"),
@@ -42,6 +40,8 @@ const elements = {
   themeBtnApp: document.getElementById("theme-btn-app"),
   fileInput: document.getElementById("file-input"),
   fileBtn: document.getElementById("file-btn"),
+  avatarInput: document.getElementById("avatar-input"),
+  avatarBtn: document.getElementById("avatar-btn"),
   viewerModal: document.getElementById("viewer-modal"),
   viewerTitle: document.getElementById("viewer-title"),
   viewerMeta: document.getElementById("viewer-meta"),
@@ -140,6 +140,21 @@ function createElement(tag, className, text) {
   return node;
 }
 
+function setAvatar(element, userLike, fallback = "??") {
+  if (!element) return;
+  element.innerHTML = "";
+  const avatarUrl = userLike?.avatar_url;
+  if (avatarUrl) {
+    const image = document.createElement("img");
+    image.src = avatarUrl;
+    image.alt = userLike?.display_name || userLike?.username || "avatar";
+    image.loading = "lazy";
+    element.appendChild(image);
+    return;
+  }
+  element.textContent = userLike?.initials || fallback;
+}
+
 function formatFileSize(bytes) {
   if (!bytes) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -165,12 +180,27 @@ function inferAttachmentKind(message) {
   return "file";
 }
 
+function setAuthenticatedSession(user) {
+  state.session = {
+    authenticated: true,
+    user,
+    app_name: "Prism",
+  };
+
+  elements.authShell?.classList.add("hidden");
+  elements.appShell?.classList.remove("hidden");
+  elements.sidebarToggle?.classList.remove("hidden");
+  setAvatar(elements.userAvatar, user, "??");
+  if (elements.userName) elements.userName.textContent = user.display_name || user.username;
+  if (elements.userHandle) elements.userHandle.textContent = `@${user.username}`;
+}
+
 function closeViewer() {
   if (!elements.viewerModal) return;
   elements.viewerModal.close();
   if (elements.viewerBody) elements.viewerBody.innerHTML = "";
   if (elements.viewerMeta) elements.viewerMeta.textContent = "";
-  if (elements.viewerTitle) elements.viewerTitle.textContent = "Attachment";
+  if (elements.viewerTitle) elements.viewerTitle.textContent = "File";
 }
 
 async function openAttachmentViewer(message) {
@@ -182,7 +212,7 @@ async function openAttachmentViewer(message) {
   if (message.attachment_size) metaParts.push(formatFileSize(message.attachment_size));
 
   elements.viewerTitle.textContent = fileName;
-  elements.viewerMeta.textContent = metaParts.join(" • ");
+  elements.viewerMeta.textContent = metaParts.join(" | ");
   elements.viewerDownload.href = message.attachment_url;
   elements.viewerBody.innerHTML = '<div class="viewer-loading">Loading preview...</div>';
   elements.viewerModal.showModal();
@@ -190,8 +220,7 @@ async function openAttachmentViewer(message) {
   try {
     if (kind === "file") {
       elements.viewerBody.innerHTML = "";
-      const note = createElement("div", "viewer-note", "Preview is not available for this file type.");
-      elements.viewerBody.appendChild(note);
+      elements.viewerBody.appendChild(createElement("div", "viewer-note", "Preview is not available for this file type."));
       return;
     }
 
@@ -242,20 +271,74 @@ async function openAttachmentViewer(message) {
   }
 }
 
+function renderInlineAttachment(message) {
+  const kind = inferAttachmentKind(message);
+  const wrap = createElement("div", "attachment-inline");
+
+  if (kind === "image") {
+    const image = createElement("img", "inline-image");
+    image.src = message.attachment_url;
+    image.alt = message.attachment_name || "Image";
+    image.loading = "lazy";
+    image.addEventListener("click", () => openAttachmentViewer(message));
+    wrap.appendChild(image);
+    return wrap;
+  }
+
+  if (kind === "video") {
+    const video = createElement("video", "inline-video");
+    video.src = message.attachment_url;
+    video.controls = true;
+    video.preload = "metadata";
+    video.playsInline = true;
+    wrap.appendChild(video);
+    return wrap;
+  }
+
+  if (kind === "text") {
+    const button = createElement("button", "inline-code-card");
+    button.type = "button";
+    button.appendChild(createElement("strong", "", message.attachment_name || "Code preview"));
+    button.appendChild(createElement("span", "", "Open full code preview"));
+    button.addEventListener("click", () => openAttachmentViewer(message));
+    wrap.appendChild(button);
+    return wrap;
+  }
+
+  if (kind === "pdf") {
+    const button = createElement("button", "inline-file-card");
+    button.type = "button";
+    button.appendChild(createElement("strong", "", message.attachment_name || "PDF document"));
+    button.appendChild(createElement("span", "", "Open PDF preview"));
+    button.addEventListener("click", () => openAttachmentViewer(message));
+    wrap.appendChild(button);
+    return wrap;
+  }
+
+  const link = createElement("a", "inline-file-card");
+  link.href = message.attachment_url;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.appendChild(createElement("strong", "", message.attachment_name || "Attachment"));
+  link.appendChild(createElement("span", "", "Open file"));
+  wrap.appendChild(link);
+  return wrap;
+}
+
 function renderRequests() {
   if (!elements.requestsList) return;
   elements.requestsList.innerHTML = "";
-  if (elements.requestsCount) elements.requestsCount.textContent = String(state.requests.length);
-
   if (!state.requests.length) {
-    elements.requestsList.appendChild(createElement("div", "empty-card", "No incoming requests."));
+    elements.requestsList.appendChild(createElement("div", "empty-small", "No incoming requests."));
     return;
   }
 
   for (const item of state.requests) {
     const card = createElement("div", "list-card");
     const user = createElement("div", "list-user");
-    user.appendChild(createElement("div", "avatar avatar-sm", item.requester.initials || "??"));
+    const avatar = createElement("div", "avatar");
+    setAvatar(avatar, item.requester, "??");
+    user.appendChild(avatar);
 
     const meta = createElement("div", "user-meta");
     meta.appendChild(createElement("strong", "", item.requester.display_name || item.requester.username));
@@ -263,10 +346,10 @@ function renderRequests() {
     user.appendChild(meta);
 
     const actions = createElement("div", "actions-row");
-    const acceptBtn = createElement("button", "primary-btn compact", "Accept");
+    const acceptBtn = createElement("button", "primary-btn small", "Accept");
     acceptBtn.type = "button";
     acceptBtn.addEventListener("click", () => handleFriendRequest(item.id, "accept"));
-    const rejectBtn = createElement("button", "ghost-btn", "Decline");
+    const rejectBtn = createElement("button", "ghost-btn small", "Decline");
     rejectBtn.type = "button";
     rejectBtn.addEventListener("click", () => handleFriendRequest(item.id, "reject"));
     actions.append(acceptBtn, rejectBtn);
@@ -279,10 +362,8 @@ function renderRequests() {
 function renderFriends() {
   if (!elements.friendsList) return;
   elements.friendsList.innerHTML = "";
-  if (elements.friendsCount) elements.friendsCount.textContent = String(state.friends.length);
-
   if (!state.friends.length) {
-    elements.friendsList.appendChild(createElement("div", "empty-card", "No friends yet. Add somebody by username."));
+    elements.friendsList.appendChild(createElement("div", "empty-small", "No friends yet. Add somebody by username."));
     return;
   }
 
@@ -292,7 +373,9 @@ function renderFriends() {
     button.classList.toggle("active", friend.username === state.activeFriend);
 
     const user = createElement("div", "list-user");
-    user.appendChild(createElement("div", "avatar avatar-sm", friend.initials || "??"));
+    const avatar = createElement("div", "avatar");
+    setAvatar(avatar, friend, "??");
+    user.appendChild(avatar);
 
     const meta = createElement("div", "user-meta");
     meta.appendChild(createElement("strong", "", friend.display_name || friend.username));
@@ -300,7 +383,7 @@ function renderFriends() {
     if (friend.last_message || friend.last_message_at) {
       const preview = createElement("small", "friend-preview");
       const when = friend.last_message_at ? formatDate(friend.last_message_at) : "";
-      preview.textContent = [friend.last_message || "Attachment", when].filter(Boolean).join(" • ");
+      preview.textContent = [friend.last_message || "Attachment", when].filter(Boolean).join(" | ");
       meta.appendChild(preview);
     }
     user.appendChild(meta);
@@ -345,12 +428,13 @@ function renderMessages() {
     }
 
     if (message.attachment_url) {
+      bubble.appendChild(renderInlineAttachment(message));
       const attachment = createElement("button", "attachment-card");
       attachment.type = "button";
       attachment.appendChild(createElement("strong", "", message.attachment_name || "Attachment"));
       const meta = [message.attachment_mime_type || inferAttachmentKind(message), formatFileSize(message.attachment_size)]
         .filter(Boolean)
-        .join(" • ");
+        .join(" | ");
       attachment.appendChild(createElement("span", "", meta));
       attachment.addEventListener("click", () => openAttachmentViewer(message));
       bubble.appendChild(attachment);
@@ -367,8 +451,11 @@ function updateActiveFriendMeta() {
   const friend = state.friends.find((item) => item.username === state.activeFriend);
   if (!friend) {
     if (elements.chatTitle) elements.chatTitle.textContent = "Select a friend";
-    if (elements.chatSubtitle) elements.chatSubtitle.textContent = "Accept a request or choose a person from the list.";
-    if (elements.chatAvatar) elements.chatAvatar.textContent = "DM";
+    if (elements.chatSubtitle) elements.chatSubtitle.textContent = "Accept a request or choose a friend from the list.";
+    if (elements.chatAvatar) {
+      elements.chatAvatar.innerHTML = "";
+      elements.chatAvatar.textContent = "DM";
+    }
     if (elements.chatStatus) elements.chatStatus.textContent = "Offline";
     if (elements.composerInput) elements.composerInput.disabled = true;
     if (elements.sendBtn) elements.sendBtn.disabled = true;
@@ -378,7 +465,7 @@ function updateActiveFriendMeta() {
 
   if (elements.chatTitle) elements.chatTitle.textContent = friend.display_name || friend.username;
   if (elements.chatSubtitle) elements.chatSubtitle.textContent = `@${friend.username}`;
-  if (elements.chatAvatar) elements.chatAvatar.textContent = friend.initials || "??";
+  setAvatar(elements.chatAvatar, friend, "??");
   if (elements.chatStatus) elements.chatStatus.textContent = friend.is_online ? "Online" : "Offline";
   if (elements.composerInput) elements.composerInput.disabled = false;
   if (elements.sendBtn) elements.sendBtn.disabled = false;
@@ -417,6 +504,7 @@ function connectSocket(username) {
       const friend = state.friends.find((item) => item.username === username);
       if (friend && payload.friend) {
         friend.is_online = Boolean(payload.friend.is_online);
+        if (payload.friend.avatar_url) friend.avatar_url = payload.friend.avatar_url;
         renderFriends();
         updateActiveFriendMeta();
       }
@@ -478,14 +566,7 @@ async function refreshSession() {
     return false;
   }
 
-  elements.authShell?.classList.add("hidden");
-  elements.appShell?.classList.remove("hidden");
-  elements.sidebarToggle?.classList.remove("hidden");
-
-  if (elements.userAvatar) elements.userAvatar.textContent = session.user.initials || "??";
-  if (elements.userName) elements.userName.textContent = session.user.display_name || session.user.username;
-  if (elements.userHandle) elements.userHandle.textContent = `@${session.user.username}`;
-
+  setAuthenticatedSession(session.user);
   await Promise.all([loadFriends(), loadRequests()]);
   if (!state.activeFriend && state.friends.length) {
     await selectFriend(state.friends[0].username);
@@ -498,10 +579,17 @@ async function refreshSession() {
 async function submitAuth(path, formElement) {
   const payload = Object.fromEntries(new FormData(formElement).entries());
   try {
-    await api(path, { method: "POST", body: JSON.stringify(payload) });
+    const user = await api(path, { method: "POST", body: JSON.stringify(payload) });
     if (elements.authError) elements.authError.textContent = "";
     formElement.reset();
-    await refreshSession();
+    setAuthenticatedSession(user);
+    await Promise.all([loadFriends(), loadRequests()]);
+    if (!state.activeFriend && state.friends.length) {
+      await selectFriend(state.friends[0].username);
+    } else {
+      renderMessages();
+      updateActiveFriendMeta();
+    }
     setStatus("Signed in");
   } catch (error) {
     if (elements.authError) elements.authError.textContent = error.message;
@@ -561,10 +649,30 @@ async function handleFileUpload(event) {
   }
 }
 
+async function handleAvatarUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const body = new FormData();
+  body.append("file", file);
+
+  try {
+    const user = await api("/api/users/me/avatar", { method: "POST", body });
+    if (state.session?.user) {
+      state.session.user = user;
+    }
+    setAuthenticatedSession(user);
+    setStatus("Avatar updated");
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    event.target.value = "";
+  }
+}
+
 function autoresizeComposer() {
   if (!elements.composerInput) return;
   elements.composerInput.style.height = "auto";
-  elements.composerInput.style.height = `${Math.min(elements.composerInput.scrollHeight, 140)}px`;
+  elements.composerInput.style.height = `${Math.min(elements.composerInput.scrollHeight, 120)}px`;
 }
 
 async function logout() {
@@ -610,6 +718,9 @@ function bindEvents() {
   });
   elements.fileBtn?.addEventListener("click", () => elements.fileInput?.click());
   elements.fileInput?.addEventListener("change", handleFileUpload);
+  elements.avatarBtn?.addEventListener("click", () => elements.avatarInput?.click());
+  elements.userAvatar?.addEventListener("click", () => elements.avatarInput?.click());
+  elements.avatarInput?.addEventListener("change", handleAvatarUpload);
   elements.sidebarToggle?.addEventListener("click", () => toggleSidebar());
   elements.sidebarClose?.addEventListener("click", () => toggleSidebar(false));
   elements.themeBtn?.addEventListener("click", toggleTheme);

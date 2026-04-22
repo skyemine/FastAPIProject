@@ -19,6 +19,10 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(40))
     password_hash: Mapped[str] = mapped_column(String(255))
+    avatar_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    avatar_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     sent_requests: Mapped[list["FriendRequest"]] = relationship(
