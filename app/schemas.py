@@ -41,6 +41,8 @@ class SessionRead(BaseModel):
     authenticated: bool
     user: UserRead | None
     app_name: str
+    push_supported: bool = False
+    push_public_key: str | None = None
 
 
 class FriendRequestCreate(BaseModel):
@@ -82,3 +84,13 @@ class DirectMessageRead(BaseModel):
 class HealthRead(BaseModel):
     status: str
     database_backend: str
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(min_length=16, max_length=255)
+    auth: str = Field(min_length=8, max_length=255)
+
+
+class PushSubscriptionCreate(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=1024)
+    keys: PushSubscriptionKeys

@@ -3,8 +3,10 @@ const state = {
   friends: [],
   requests: [],
   activeFriend: null,
+  pendingChatUsername: new URLSearchParams(window.location.search).get("chat"),
   messagesByFriend: new Map(),
   socket: null,
+  serviceWorkerRegistration: null,
   socketMeta: {
     friendUsername: null,
     intentionalClose: false,
@@ -104,15 +106,93 @@ async function maybeEnableNotifications() {
   }
 }
 
-function notifyIncomingMessage(message) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission !== "granted") return;
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4 || 4)) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from(rawData, (char) => char.charCodeAt(0));
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  if (state.serviceWorkerRegistration) return state.serviceWorkerRegistration;
+  try {
+    state.serviceWorkerRegistration = await navigator.serviceWorker.register("/service-worker.js");
+    return state.serviceWorkerRegistration;
+  } catch {
+    return null;
+  }
+}
+
+async function ensurePushSubscription() {
+  if (!state.session?.authenticated || !state.session.push_supported || !state.session.push_public_key) return;
+  if (!("PushManager" in window)) return;
+  try {
+    const registration = await registerServiceWorker();
+    if (!registration) return;
+
+    if ("Notification" in window && Notification.permission === "default") {
+      try {
+        await Notification.requestPermission();
+      } catch {
+        return;
+      }
+    }
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(state.session.push_public_key),
+      });
+    }
+
+    await api("/api/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify(subscription.toJSON()),
+    });
+  } catch {
+    return;
+  }
+}
+
+async function unsubscribePushNotifications() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    const registration = await registerServiceWorker();
+    if (!registration) return;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+    await api("/api/push/unsubscribe", {
+      method: "POST",
+      body: JSON.stringify(subscription.toJSON()),
+    });
+    await subscription.unsubscribe();
+  } catch {
+    return;
+  }
+}
+
+async function notifyIncomingMessage(message) {
   if (document.visibilityState === "visible") return;
   if (!state.session || message.sender_username === state.session.user.username) return;
-  new Notification(message.sender_display_name || message.sender_username, {
-    body: message.content || message.attachment_name || "New message",
-    silent: false,
-  });
+  const registration = await registerServiceWorker();
+  const title = message.sender_display_name || message.sender_username;
+  const body = message.content || message.attachment_name || "New message";
+  if (registration && "showNotification" in registration) {
+    await registration.showNotification(title, {
+      body,
+      tag: `dm:${message.sender_username}`,
+      data: {
+        friend_username: message.sender_username,
+        url: `/?chat=${encodeURIComponent(message.sender_username)}`,
+      },
+    });
+    return;
+  }
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  new Notification(title, { body, silent: false });
 }
 
 function toggleSidebar(forceOpen) {
@@ -238,9 +318,9 @@ function inferAttachmentKind(message) {
 
 function setAuthenticatedSession(user) {
   state.session = {
-    authenticated: true,
+    ...(state.session || {}),
     user,
-    app_name: "Prism",
+    authenticated: true,
   };
   elements.authShell?.classList.add("hidden");
   elements.appShell?.classList.remove("hidden");
@@ -805,6 +885,18 @@ async function selectFriend(username) {
   if (window.innerWidth < 960) toggleSidebar(false);
 }
 
+async function selectPendingFriendIfNeeded() {
+  if (!state.pendingChatUsername) return;
+  const friend = state.friends.find((item) => item.username === state.pendingChatUsername);
+  if (!friend) return;
+  const username = state.pendingChatUsername;
+  state.pendingChatUsername = null;
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.delete("chat");
+  window.history.replaceState({}, "", nextUrl);
+  await selectFriend(username);
+}
+
 async function loadFriends() {
   state.friends = await api("/api/friends");
   renderFriends();
@@ -835,7 +927,9 @@ async function refreshSession() {
 
   setAuthenticatedSession(session.user);
   await maybeEnableNotifications();
+  await ensurePushSubscription();
   await Promise.all([loadFriends(), loadRequests()]);
+  await selectPendingFriendIfNeeded();
   if (!state.activeFriend && state.friends.length) {
     await selectFriend(state.friends[0].username);
   } else {
@@ -853,7 +947,9 @@ async function submitAuth(path, formElement) {
     formElement.reset();
     setAuthenticatedSession(user);
     await maybeEnableNotifications();
+    await ensurePushSubscription();
     await Promise.all([loadFriends(), loadRequests()]);
+    await selectPendingFriendIfNeeded();
     if (!state.activeFriend && state.friends.length) {
       await selectFriend(state.friends[0].username);
     } else {
@@ -994,6 +1090,7 @@ async function startCall() {
 
 async function logout() {
   try {
+    await unsubscribePushNotifications();
     await api("/api/auth/logout", { method: "POST" });
   } finally {
     state.session = null;

@@ -52,6 +52,9 @@ class Settings:
     message_rate_limit_window_seconds: int
     message_history_limit: int
     hsts_max_age_seconds: int
+    push_public_key: str
+    push_private_key: str
+    push_subject: str
 
     @property
     def is_production(self) -> bool:
@@ -92,4 +95,7 @@ def load_settings(database_url: str | None = None) -> Settings:
         message_rate_limit_window_seconds=int(os.getenv("MESSAGE_RATE_LIMIT_WINDOW_SECONDS", "10")),
         message_history_limit=int(os.getenv("MESSAGE_HISTORY_LIMIT", "60")),
         hsts_max_age_seconds=int(os.getenv("HSTS_MAX_AGE_SECONDS", str(60 * 60 * 24 * 30))),
+        push_public_key=os.getenv("PUSH_PUBLIC_KEY", ""),
+        push_private_key=os.getenv("PUSH_PRIVATE_KEY", ""),
+        push_subject=os.getenv("PUSH_SUBJECT", "mailto:admin@example.com"),
     )

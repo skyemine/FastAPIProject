@@ -9,8 +9,6 @@ from collections import defaultdict, deque
 from datetime import datetime
 from threading import Lock
 
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-
 
 class InvalidSessionError(ValueError):
     pass
@@ -43,19 +41,13 @@ DUMMY_PASSWORD_HASH = "scrypt$8iLk2iqyYy4T6Bq0hR9nkw==$4Qtj7M0PjD3W4VLO6P0SWV+vD
 
 class SessionManager:
     def __init__(self, secret_key: str) -> None:
-        self.serializer = URLSafeTimedSerializer(secret_key=secret_key, salt="pulsechat-session")
+        self._secret = secret_key.encode("utf-8")
 
-    def issue_token(self, user_id: int) -> str:
-        return self.serializer.dumps({"user_id": user_id})
+    def issue_token(self) -> str:
+        return secrets.token_urlsafe(32)
 
-    def read_token(self, token: str, max_age_seconds: int) -> int:
-        try:
-            payload = self.serializer.loads(token, max_age=max_age_seconds)
-        except SignatureExpired as exc:
-            raise InvalidSessionError("Session expired. Please sign in again.") from exc
-        except BadSignature as exc:
-            raise InvalidSessionError("Session is invalid. Please sign in again.") from exc
-        return int(payload["user_id"])
+    def fingerprint(self, token: str) -> str:
+        return hmac.new(self._secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def hash_password(password: str) -> str:

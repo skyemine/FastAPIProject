@@ -24,6 +24,9 @@ def build_settings(tmp_path) -> Settings:
         message_rate_limit_window_seconds=10,
         message_history_limit=50,
         hsts_max_age_seconds=3600,
+        push_public_key="",
+        push_private_key="",
+        push_subject="mailto:test@example.com",
     )
 
 
@@ -70,6 +73,30 @@ def test_session_persists_across_app_restart(tmp_path) -> None:
         assert session_response.status_code == 200
         assert session_response.json()["authenticated"] is True
         assert session_response.json()["user"]["username"] == "restart_dev"
+
+
+def test_two_clients_keep_separate_sessions_on_same_server(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as alice_client, TestClient(app) as bob_client:
+        register(alice_client, "alice_multi", "Alice")
+        register(bob_client, "bob_multi", "Bob")
+
+        alice_session = alice_client.get("/api/session").json()
+        bob_session = bob_client.get("/api/session").json()
+
+        assert alice_session["authenticated"] is True
+        assert bob_session["authenticated"] is True
+        assert alice_session["user"]["username"] == "alice_multi"
+        assert bob_session["user"]["username"] == "bob_multi"
+
+        alice_client.post("/api/auth/logout")
+        alice_after_logout = alice_client.get("/api/session").json()
+        bob_still_signed_in = bob_client.get("/api/session").json()
+
+        assert alice_after_logout["authenticated"] is False
+        assert bob_still_signed_in["authenticated"] is True
+        assert bob_still_signed_in["user"]["username"] == "bob_multi"
 
 
 def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
@@ -192,6 +219,28 @@ def test_avatar_upload_persists_in_session(tmp_path) -> None:
 
         avatar_response = client.get(payload["avatar_url"])
         assert avatar_response.status_code == 200
+
+
+def test_avatar_persists_across_app_restart(tmp_path) -> None:
+    settings = build_settings(tmp_path)
+    app = create_app(settings=settings)
+
+    with TestClient(app) as client:
+        register(client, "avatar_restart", "Avatar Restart")
+        upload_response = client.post(
+            "/api/users/me/avatar",
+            files={"file": ("avatar.png", b"\x89PNG\r\n\x1a\navatar-data", "image/png")},
+        )
+        assert upload_response.status_code == 200
+        avatar_url = upload_response.json()["avatar_url"]
+        session_cookie = client.cookies.get(settings.session_cookie_name)
+
+    restarted_app = create_app(settings=settings)
+    with TestClient(restarted_app) as restarted_client:
+        restarted_client.cookies.set(settings.session_cookie_name, session_cookie)
+        session_response = restarted_client.get("/api/session")
+        assert session_response.status_code == 200
+        assert session_response.json()["user"]["avatar_url"] == avatar_url
 
 
 def test_profile_update_changes_username_and_password(tmp_path) -> None:

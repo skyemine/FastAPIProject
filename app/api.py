@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
+import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -15,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import and_, inspect as sa_inspect, or_, select, text
+from sqlalchemy import and_, delete, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import Session, aliased, selectinload
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -24,7 +26,7 @@ from .chat import ConnectionManager
 from .config import Settings, load_settings
 from .database import Database
 from .middleware import SecurityHeadersMiddleware
-from .models import DirectMessage, FriendRequest, Friendship, User
+from .models import AuthSession, DirectMessage, FriendRequest, Friendship, PushSubscription, User
 from .schemas import (
     AuthRequest,
     DirectMessageRead,
@@ -33,6 +35,7 @@ from .schemas import (
     FriendRequestRead,
     HealthRead,
     ProfileUpdateRequest,
+    PushSubscriptionCreate,
     SessionRead,
     UserRead,
     UserSearchRead,
@@ -49,7 +52,12 @@ from .security import (
     validate_password_strength,
     verify_password,
 )
-import secrets
+
+try:
+    from pywebpush import WebPushException, webpush
+except Exception:  # pragma: no cover - optional dependency at runtime
+    WebPushException = Exception
+    webpush = None
 
 T = TypeVar("T")
 USERNAME_PATTERN = re.compile(r"[^a-z0-9_]+")
@@ -265,6 +273,172 @@ def extract_client_key(request: Request, username: str | None = None) -> str:
     if username:
         return f"{ip_address}:{normalize_username(username)}"
     return ip_address
+
+
+def extract_ip_and_user_agent(request: Request) -> tuple[str, str]:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    ip_address = forwarded_for.split(",")[0].strip() if forwarded_for else (request.client.host if request.client else "unknown")
+    user_agent = request.headers.get("user-agent", "").strip()[:255]
+    return ip_address or "unknown", user_agent
+
+
+def push_enabled(settings: Settings) -> bool:
+    return bool(settings.push_public_key and settings.push_private_key and webpush is not None)
+
+
+def vapid_claims(settings: Settings) -> dict[str, str]:
+    return {"sub": settings.push_subject}
+
+
+def base64url_to_bytes(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(f"{value}{padding}")
+
+
+def bytes_to_base64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def ensure_push_configuration(settings: Settings) -> None:
+    if settings.push_public_key and settings.push_private_key:
+        return
+
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+    except Exception:
+        return
+
+    push_dir = Path("data") / "push"
+    private_key_path = push_dir / "vapid_private.pem"
+    public_key_path = push_dir / "vapid_public.txt"
+
+    if private_key_path.exists() and public_key_path.exists():
+        settings.push_private_key = str(private_key_path.resolve())
+        settings.push_public_key = public_key_path.read_text(encoding="utf-8").strip()
+        return
+
+    push_dir.mkdir(parents=True, exist_ok=True)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    private_key_path.write_bytes(private_bytes)
+    public_key_path.write_text(bytes_to_base64url(public_bytes), encoding="utf-8")
+    settings.push_private_key = str(private_key_path.resolve())
+    settings.push_public_key = public_key_path.read_text(encoding="utf-8").strip()
+
+
+def create_session_token(
+    session: Session,
+    session_manager: SessionManager,
+    settings: Settings,
+    user_id: int,
+    ip_address: str,
+    user_agent: str,
+) -> str:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=settings.session_max_age_seconds)
+    session.execute(delete(AuthSession).where(AuthSession.expires_at <= now))
+    token = session_manager.issue_token()
+    token_hash = session_manager.fingerprint(token)
+    session.add(
+        AuthSession(
+            user_id=user_id,
+            session_token_hash=token_hash,
+            ip_address=ip_address[:120],
+            user_agent=user_agent,
+            created_at=now,
+            last_seen_at=now,
+            expires_at=expires_at,
+        )
+    )
+    session.commit()
+    return token
+
+
+def revoke_session_token(session: Session, session_manager: SessionManager, token: str) -> None:
+    token_hash = session_manager.fingerprint(token)
+    session.execute(delete(AuthSession).where(AuthSession.session_token_hash == token_hash))
+    session.commit()
+
+
+def load_identity_from_session_token(
+    session: Session,
+    session_manager: SessionManager,
+    token: str,
+    settings: Settings,
+) -> UserIdentity:
+    now = datetime.now(timezone.utc)
+    token_hash = session_manager.fingerprint(token)
+    auth_session = session.scalar(
+        select(AuthSession)
+        .options(selectinload(AuthSession.user))
+        .where(AuthSession.session_token_hash == token_hash)
+    )
+    if auth_session is None:
+        raise InvalidSessionError("Session is invalid. Please sign in again.")
+    if normalize_datetime(auth_session.expires_at) <= now:
+        session.execute(delete(AuthSession).where(AuthSession.id == auth_session.id))
+        session.commit()
+        raise InvalidSessionError("Session expired. Please sign in again.")
+    auth_session.last_seen_at = now
+    user = auth_session.user
+    if user is None:
+        session.execute(delete(AuthSession).where(AuthSession.id == auth_session.id))
+        session.commit()
+        raise InvalidSessionError("Session is invalid. Please sign in again.")
+    session.commit()
+    return user_to_identity(user)
+
+
+def save_push_subscription(session: Session, user_id: int, payload: PushSubscriptionCreate) -> None:
+    existing = session.scalar(select(PushSubscription).where(PushSubscription.endpoint == payload.endpoint))
+    now = datetime.now(timezone.utc)
+    if existing is None:
+        session.add(
+            PushSubscription(
+                user_id=user_id,
+                endpoint=payload.endpoint,
+                p256dh=payload.keys.p256dh,
+                auth=payload.keys.auth,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    else:
+        existing.user_id = user_id
+        existing.p256dh = payload.keys.p256dh
+        existing.auth = payload.keys.auth
+        existing.updated_at = now
+    session.commit()
+
+
+def delete_push_subscription(session: Session, user_id: int, endpoint: str) -> None:
+    session.execute(delete(PushSubscription).where(PushSubscription.user_id == user_id, PushSubscription.endpoint == endpoint))
+    session.commit()
+
+
+def list_push_subscriptions(session: Session, user_id: int) -> list[PushSubscription]:
+    return list(session.scalars(select(PushSubscription).where(PushSubscription.user_id == user_id)))
+
+
+def delete_push_subscriptions(session: Session, user_id: int, endpoints: list[str]) -> None:
+    if not endpoints:
+        return
+    session.execute(
+        delete(PushSubscription).where(
+            PushSubscription.user_id == user_id,
+            PushSubscription.endpoint.in_(endpoints),
+        )
+    )
+    session.commit()
 
 
 def are_friends(session: Session, user_id: int, friend_id: int) -> bool:
@@ -530,6 +704,64 @@ def save_or_update_avatar(
     return user_to_schema(user)
 
 
+def build_push_payload(message: DirectMessageRead, friend_username: str) -> str:
+    body = message.content or message.attachment_name or "New attachment"
+    return json.dumps(
+        {
+            "title": message.sender_display_name or message.sender_username,
+            "body": body,
+            "tag": f"dm:{message.sender_username}:{friend_username}",
+            "data": {
+                "friend_username": message.sender_username,
+                "url": f"/?chat={message.sender_username}",
+            },
+        }
+    )
+
+
+def send_push_notifications(
+    database: Database,
+    settings: Settings,
+    recipient_user_id: int,
+    payload: str,
+) -> None:
+    if not push_enabled(settings):
+        return
+
+    subscriptions = run_with_session(database, lambda session: list_push_subscriptions(session, recipient_user_id))
+    if not subscriptions:
+        return
+
+    expired_endpoints: list[str] = []
+    for subscription in subscriptions:
+        subscription_info = {
+            "endpoint": subscription.endpoint,
+            "keys": {
+                "p256dh": subscription.p256dh,
+                "auth": subscription.auth,
+            },
+        }
+        try:
+            webpush(
+                subscription_info=subscription_info,
+                data=payload,
+                vapid_private_key=settings.push_private_key,
+                vapid_claims=vapid_claims(settings),
+            )
+        except WebPushException as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code in {404, 410}:
+                expired_endpoints.append(subscription.endpoint)
+        except Exception:
+            continue
+
+    if expired_endpoints:
+        run_with_session(
+            database,
+            lambda session: delete_push_subscriptions(session, recipient_user_id, expired_endpoints),
+        )
+
+
 def ensure_sqlite_schema_compatibility(database: Database) -> None:
     if database.engine.url.get_backend_name() != "sqlite":
         return
@@ -585,11 +817,11 @@ def ensure_sqlite_schema_compatibility(database: Database) -> None:
             connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_avatar_token ON users (avatar_token)"))
 
 
-def issue_session_cookie(response: Response, session_manager: SessionManager, settings: Settings, user: UserIdentity) -> None:
+def issue_session_cookie(response: Response, settings: Settings, token: str) -> None:
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.session_max_age_seconds)
     response.set_cookie(
         key=settings.session_cookie_name,
-        value=session_manager.issue_token(user.id),
+        value=token,
         httponly=True,
         samesite="strict",
         secure=settings.cookie_secure,
@@ -614,12 +846,12 @@ def current_identity_from_request(request: Request, database: Database, session_
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
     try:
-        user_id = session_manager.read_token(token, settings.session_max_age_seconds)
+        identity = run_with_session(
+            database,
+            lambda session: load_identity_from_session_token(session, session_manager, token, settings),
+        )
     except InvalidSessionError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    identity = run_with_session(database, lambda session: load_identity(session, user_id))
-    if identity is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User was not found.")
     return identity
 
 
@@ -630,17 +862,18 @@ def current_identity_from_websocket(
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
     try:
-        user_id = session_manager.read_token(token, settings.session_max_age_seconds)
+        identity = run_with_session(
+            database,
+            lambda session: load_identity_from_session_token(session, session_manager, token, settings),
+        )
     except InvalidSessionError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    identity = run_with_session(database, lambda session: load_identity(session, user_id))
-    if identity is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User was not found.")
     return identity
 
 
 def create_app(settings: Settings | None = None, database_url: str | None = None) -> FastAPI:
     resolved_settings = settings or load_settings(database_url)
+    ensure_push_configuration(resolved_settings)
     resolved_settings.validate()
     database = Database(resolved_settings.database_url)
     session_manager = SessionManager(resolved_settings.secret_key)
@@ -688,6 +921,10 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     def frontend() -> FileResponse:
         return FileResponse(static_dir / "index.html")
 
+    @app.get("/service-worker.js", include_in_schema=False)
+    def service_worker() -> FileResponse:
+        return FileResponse(static_dir / "service-worker.js", media_type="application/javascript")
+
     @app.get("/api/health", response_model=HealthRead)
     def healthcheck() -> HealthRead:
         return HealthRead(status="ok", database_backend=detect_database_backend(resolved_settings.database_url))
@@ -698,8 +935,20 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         try:
             identity = current_identity_from_request(request, database, session_manager, resolved_settings)
         except HTTPException:
-            return SessionRead(authenticated=False, user=None, app_name=resolved_settings.app_name)
-        return SessionRead(authenticated=True, user=identity_to_user_schema(identity), app_name=resolved_settings.app_name)
+            return SessionRead(
+                authenticated=False,
+                user=None,
+                app_name=resolved_settings.app_name,
+                push_supported=push_enabled(resolved_settings),
+                push_public_key=resolved_settings.push_public_key or None,
+            )
+        return SessionRead(
+            authenticated=True,
+            user=identity_to_user_schema(identity),
+            app_name=resolved_settings.app_name,
+            push_supported=push_enabled(resolved_settings),
+            push_public_key=resolved_settings.push_public_key or None,
+        )
 
     @app.post("/api/auth/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
     def register(payload: AuthRequest, request: Request, response: Response) -> UserRead:
@@ -714,7 +963,19 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         except RateLimitError as exc:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
         identity = run_with_session(database, lambda session: create_user(session, payload))
-        issue_session_cookie(response, session_manager, resolved_settings, identity)
+        ip_address, user_agent = extract_ip_and_user_agent(request)
+        session_token = run_with_session(
+            database,
+            lambda session: create_session_token(
+                session,
+                session_manager,
+                resolved_settings,
+                identity.id,
+                ip_address,
+                user_agent,
+            ),
+        )
+        issue_session_cookie(response, resolved_settings, session_token)
         return identity_to_user_schema(identity)
 
     @app.post("/api/auth/login", response_model=UserRead)
@@ -730,11 +991,26 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         except RateLimitError as exc:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
         identity = run_with_session(database, lambda session: authenticate_user(session, payload))
-        issue_session_cookie(response, session_manager, resolved_settings, identity)
+        ip_address, user_agent = extract_ip_and_user_agent(request)
+        session_token = run_with_session(
+            database,
+            lambda session: create_session_token(
+                session,
+                session_manager,
+                resolved_settings,
+                identity.id,
+                ip_address,
+                user_agent,
+            ),
+        )
+        issue_session_cookie(response, resolved_settings, session_token)
         return identity_to_user_schema(identity)
 
     @app.post("/api/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
-    def logout(response: Response) -> Response:
+    def logout(request: Request, response: Response) -> Response:
+        token = request.cookies.get(resolved_settings.session_cookie_name)
+        if token:
+            run_with_session(database, lambda session: revoke_session_token(session, session_manager, token))
         clear_session_cookie(response, resolved_settings)
         return response
 
@@ -746,7 +1022,6 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         refreshed_identity = run_with_session(database, lambda session: load_identity(session, identity.id))
         if refreshed_identity is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User was not found.")
-        issue_session_cookie(response, session_manager, resolved_settings, refreshed_identity)
         return updated_user
 
     @app.post("/api/users/me/avatar", response_model=UserRead)
@@ -801,6 +1076,20 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     def read_friend_requests(request: Request) -> list[FriendRequestRead]:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
         return run_with_session(database, lambda session: list_friend_requests(session, identity.id))
+
+    @app.post("/api/push/subscribe", status_code=status.HTTP_204_NO_CONTENT)
+    def subscribe_push(payload: PushSubscriptionCreate, request: Request) -> Response:
+        identity = current_identity_from_request(request, database, session_manager, resolved_settings)
+        if not push_enabled(resolved_settings):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Push notifications are not configured.")
+        run_with_session(database, lambda session: save_push_subscription(session, identity.id, payload))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/push/unsubscribe", status_code=status.HTTP_204_NO_CONTENT)
+    def unsubscribe_push(payload: PushSubscriptionCreate, request: Request) -> Response:
+        identity = current_identity_from_request(request, database, session_manager, resolved_settings)
+        run_with_session(database, lambda session: delete_push_subscription(session, identity.id, payload.endpoint))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/api/users/search", response_model=list[UserSearchRead])
     def search_people(query: str, request: Request) -> list[UserSearchRead]:
@@ -873,6 +1162,16 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
             direct_channel_key(identity.id, target_identity.id),
             {"type": "message", "message": saved_message.model_dump(mode="json")},
         )
+        if target_identity.id != identity.id:
+            asyncio.create_task(
+                asyncio.to_thread(
+                    send_push_notifications,
+                    database,
+                    resolved_settings,
+                    target_identity.id,
+                    build_push_payload(saved_message, friend_username),
+                )
+            )
         return saved_message
 
     @app.get("/api/files/{attachment_token}")
@@ -990,6 +1289,16 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
                     lambda session: create_direct_message(session, identity.id, friend_username, content),
                 )
                 await manager.broadcast(channel, {"type": "message", "message": saved_message.model_dump(mode="json")})
+                if target_identity.id != identity.id:
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            send_push_notifications,
+                            database,
+                            resolved_settings,
+                            target_identity.id,
+                            build_push_payload(saved_message, friend_username),
+                        )
+                    )
         except WebSocketDisconnect:
             await manager.disconnect(channel, websocket)
             await manager.mark_offline(identity.id)
