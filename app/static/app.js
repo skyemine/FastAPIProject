@@ -5,6 +5,7 @@ const state = {
   activeFriend: null,
   messagesByFriend: new Map(),
   socket: null,
+  theme: localStorage.getItem("prism-theme") || "light",
 };
 
 const elements = {
@@ -22,7 +23,9 @@ const elements = {
   friendForm: document.getElementById("friend-form"),
   friendUsername: document.getElementById("friend-username"),
   requestsList: document.getElementById("requests-list"),
+  requestsCount: document.getElementById("requests-count"),
   friendsList: document.getElementById("friends-list"),
+  friendsCount: document.getElementById("friends-count"),
   messageStream: document.getElementById("message-stream"),
   composerForm: document.getElementById("composer-form"),
   composerInput: document.getElementById("composer-input"),
@@ -39,6 +42,12 @@ const elements = {
   themeBtnApp: document.getElementById("theme-btn-app"),
   fileInput: document.getElementById("file-input"),
   fileBtn: document.getElementById("file-btn"),
+  viewerModal: document.getElementById("viewer-modal"),
+  viewerTitle: document.getElementById("viewer-title"),
+  viewerMeta: document.getElementById("viewer-meta"),
+  viewerBody: document.getElementById("viewer-body"),
+  viewerClose: document.getElementById("viewer-close"),
+  viewerDownload: document.getElementById("viewer-download"),
 };
 
 function switchAuthTab(mode) {
@@ -50,21 +59,28 @@ function switchAuthTab(mode) {
   if (elements.authError) elements.authError.textContent = "";
 }
 
-function toggleSidebar(forceOpen) {
-  if (!elements.sidebar) return;
-  const shouldOpen = forceOpen ?? !elements.sidebar.classList.contains("open");
-  elements.sidebar.classList.toggle("open", shouldOpen);
+function applyTheme(theme) {
+  state.theme = theme === "dark" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", state.theme);
+  localStorage.setItem("prism-theme", state.theme);
 }
 
 function toggleTheme() {
-  const current = document.documentElement.getAttribute("data-theme") || "light";
-  document.documentElement.setAttribute("data-theme", current === "dark" ? "light" : "dark");
+  applyTheme(state.theme === "dark" ? "light" : "dark");
+}
+
+function toggleSidebar(forceOpen) {
+  if (!elements.sidebar || !elements.sidebarToggle) return;
+  const shouldOpen = forceOpen ?? !elements.sidebar.classList.contains("open");
+  elements.sidebar.classList.toggle("open", shouldOpen);
+  elements.sidebarToggle.setAttribute("aria-expanded", String(shouldOpen));
 }
 
 async function api(path, options = {}) {
   const hasFormData = options.body instanceof FormData;
   const response = await fetch(path, {
     credentials: "same-origin",
+    cache: "no-store",
     ...options,
     headers: {
       ...(hasFormData ? {} : { "Content-Type": "application/json" }),
@@ -85,18 +101,36 @@ async function api(path, options = {}) {
 }
 
 function setStatus(message) {
-  if (elements.statusLine) elements.statusLine.textContent = message;
+  if (elements.statusLine) {
+    elements.statusLine.textContent = message;
+  }
+}
+
+function parseServerDate(value) {
+  if (!value) return null;
+  const normalized = /\dZ$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function formatDate(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString([], {
-    hour: "2-digit",
-    minute: "2-digit",
+  const date = parseServerDate(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("uk-UA", {
     day: "2-digit",
     month: "short",
-  });
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatFullDate(value) {
+  const date = parseServerDate(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("uk-UA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 function createElement(tag, className, text) {
@@ -106,28 +140,133 @@ function createElement(tag, className, text) {
   return node;
 }
 
+function formatFileSize(bytes) {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function inferAttachmentKind(message) {
+  const mime = (message.attachment_mime_type || "").toLowerCase();
+  const fileName = (message.attachment_name || "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime === "application/pdf") return "pdf";
+  if (
+    mime.startsWith("text/") ||
+    mime.includes("json") ||
+    [".py", ".js", ".ts", ".tsx", ".jsx", ".css", ".html", ".md", ".json", ".yml", ".yaml", ".txt", ".log"].some((ext) =>
+      fileName.endsWith(ext)
+    )
+  ) {
+    return "text";
+  }
+  return "file";
+}
+
+function closeViewer() {
+  if (!elements.viewerModal) return;
+  elements.viewerModal.close();
+  if (elements.viewerBody) elements.viewerBody.innerHTML = "";
+  if (elements.viewerMeta) elements.viewerMeta.textContent = "";
+  if (elements.viewerTitle) elements.viewerTitle.textContent = "Attachment";
+}
+
+async function openAttachmentViewer(message) {
+  if (!elements.viewerModal || !elements.viewerBody || !message.attachment_url) return;
+  const kind = inferAttachmentKind(message);
+  const fileName = message.attachment_name || "Attachment";
+  const metaParts = [];
+  if (message.attachment_mime_type) metaParts.push(message.attachment_mime_type);
+  if (message.attachment_size) metaParts.push(formatFileSize(message.attachment_size));
+
+  elements.viewerTitle.textContent = fileName;
+  elements.viewerMeta.textContent = metaParts.join(" • ");
+  elements.viewerDownload.href = message.attachment_url;
+  elements.viewerBody.innerHTML = '<div class="viewer-loading">Loading preview...</div>';
+  elements.viewerModal.showModal();
+
+  try {
+    if (kind === "file") {
+      elements.viewerBody.innerHTML = "";
+      const note = createElement("div", "viewer-note", "Preview is not available for this file type.");
+      elements.viewerBody.appendChild(note);
+      return;
+    }
+
+    const response = await fetch(message.attachment_url, { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Could not load attachment.");
+    }
+
+    if (kind === "text") {
+      const text = await response.text();
+      elements.viewerBody.innerHTML = "";
+      const pre = createElement("pre", "code-viewer");
+      pre.textContent = text;
+      elements.viewerBody.appendChild(pre);
+      return;
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    elements.viewerBody.innerHTML = "";
+
+    if (kind === "image") {
+      const img = createElement("img", "media-viewer");
+      img.src = objectUrl;
+      img.alt = fileName;
+      elements.viewerBody.appendChild(img);
+      return;
+    }
+
+    if (kind === "video") {
+      const video = createElement("video", "media-viewer");
+      video.src = objectUrl;
+      video.controls = true;
+      video.playsInline = true;
+      elements.viewerBody.appendChild(video);
+      return;
+    }
+
+    if (kind === "pdf") {
+      const frame = createElement("iframe", "pdf-viewer");
+      frame.src = objectUrl;
+      frame.title = fileName;
+      elements.viewerBody.appendChild(frame);
+    }
+  } catch (error) {
+    elements.viewerBody.innerHTML = "";
+    elements.viewerBody.appendChild(createElement("div", "viewer-note", error.message || "Preview failed."));
+  }
+}
+
 function renderRequests() {
   if (!elements.requestsList) return;
   elements.requestsList.innerHTML = "";
+  if (elements.requestsCount) elements.requestsCount.textContent = String(state.requests.length);
+
   if (!state.requests.length) {
-    elements.requestsList.appendChild(createElement("div", "empty-small", "No incoming requests."));
+    elements.requestsList.appendChild(createElement("div", "empty-card", "No incoming requests."));
     return;
   }
 
   for (const item of state.requests) {
     const card = createElement("div", "list-card");
     const user = createElement("div", "list-user");
-    user.appendChild(createElement("div", "avatar mini", item.requester.initials || "??"));
-    const meta = createElement("div");
+    user.appendChild(createElement("div", "avatar avatar-sm", item.requester.initials || "??"));
+
+    const meta = createElement("div", "user-meta");
     meta.appendChild(createElement("strong", "", item.requester.display_name || item.requester.username));
     meta.appendChild(createElement("span", "", `@${item.requester.username}`));
     user.appendChild(meta);
 
     const actions = createElement("div", "actions-row");
-    const acceptBtn = createElement("button", "primary-btn small", "Accept");
+    const acceptBtn = createElement("button", "primary-btn compact", "Accept");
     acceptBtn.type = "button";
     acceptBtn.addEventListener("click", () => handleFriendRequest(item.id, "accept"));
-    const rejectBtn = createElement("button", "ghost-btn small", "Decline");
+    const rejectBtn = createElement("button", "ghost-btn", "Decline");
     rejectBtn.type = "button";
     rejectBtn.addEventListener("click", () => handleFriendRequest(item.id, "reject"));
     actions.append(acceptBtn, rejectBtn);
@@ -140,8 +279,10 @@ function renderRequests() {
 function renderFriends() {
   if (!elements.friendsList) return;
   elements.friendsList.innerHTML = "";
+  if (elements.friendsCount) elements.friendsCount.textContent = String(state.friends.length);
+
   if (!state.friends.length) {
-    elements.friendsList.appendChild(createElement("div", "empty-small", "No friends yet. Add somebody by username."));
+    elements.friendsList.appendChild(createElement("div", "empty-card", "No friends yet. Add somebody by username."));
     return;
   }
 
@@ -151,13 +292,25 @@ function renderFriends() {
     button.classList.toggle("active", friend.username === state.activeFriend);
 
     const user = createElement("div", "list-user");
-    user.appendChild(createElement("div", "avatar mini", friend.initials || "??"));
-    const meta = createElement("div");
+    user.appendChild(createElement("div", "avatar avatar-sm", friend.initials || "??"));
+
+    const meta = createElement("div", "user-meta");
     meta.appendChild(createElement("strong", "", friend.display_name || friend.username));
     meta.appendChild(createElement("span", "", `@${friend.username}`));
+    if (friend.last_message || friend.last_message_at) {
+      const preview = createElement("small", "friend-preview");
+      const when = friend.last_message_at ? formatDate(friend.last_message_at) : "";
+      preview.textContent = [friend.last_message || "Attachment", when].filter(Boolean).join(" • ");
+      meta.appendChild(preview);
+    }
     user.appendChild(meta);
-    button.appendChild(user);
-    button.appendChild(createElement("span", `presence-dot ${friend.is_online ? "online" : ""}`));
+
+    const presence = createElement("div", "presence-wrap");
+    presence.appendChild(createElement("span", `presence-dot ${friend.is_online ? "online" : ""}`));
+    const statusText = createElement("small", "presence-label", friend.is_online ? "Online" : "Offline");
+    presence.appendChild(statusText);
+
+    button.append(user, presence);
     button.addEventListener("click", () => selectFriend(friend.username));
     elements.friendsList.appendChild(button);
   }
@@ -167,6 +320,7 @@ function renderMessages() {
   if (!elements.messageStream) return;
   elements.messageStream.innerHTML = "";
   const messages = state.messagesByFriend.get(state.activeFriend) || [];
+
   if (!messages.length) {
     const empty = createElement("div", "empty-state");
     empty.appendChild(createElement("strong", "", "No messages yet"));
@@ -176,12 +330,14 @@ function renderMessages() {
   }
 
   for (const message of messages) {
-    const mine = state.session && message.sender_username === state.session.user.username;
+    const mine = Boolean(state.session && message.sender_username === state.session.user.username);
     const article = createElement("article", `message ${mine ? "mine" : ""}`);
     const bubble = createElement("div", "message-bubble");
     const head = createElement("div", "message-head");
     head.appendChild(createElement("strong", "", message.sender_display_name || message.sender_username || "User"));
-    head.appendChild(createElement("span", "", formatDate(message.sent_at)));
+    const time = createElement("span", "", formatDate(message.sent_at));
+    time.title = formatFullDate(message.sent_at);
+    head.appendChild(time);
     bubble.appendChild(head);
 
     if (message.content) {
@@ -189,15 +345,14 @@ function renderMessages() {
     }
 
     if (message.attachment_url) {
-      const attachment = createElement("a", "attachment-card");
-      attachment.href = message.attachment_url;
-      attachment.target = "_blank";
-      attachment.rel = "noreferrer";
+      const attachment = createElement("button", "attachment-card");
+      attachment.type = "button";
       attachment.appendChild(createElement("strong", "", message.attachment_name || "Attachment"));
-      const meta = [];
-      if (message.attachment_mime_type) meta.push(message.attachment_mime_type);
-      if (message.attachment_size) meta.push(`${Math.ceil(message.attachment_size / 1024)} KB`);
-      attachment.appendChild(createElement("span", "", meta.join(" • ")));
+      const meta = [message.attachment_mime_type || inferAttachmentKind(message), formatFileSize(message.attachment_size)]
+        .filter(Boolean)
+        .join(" • ");
+      attachment.appendChild(createElement("span", "", meta));
+      attachment.addEventListener("click", () => openAttachmentViewer(message));
       bubble.appendChild(attachment);
     }
 
@@ -211,8 +366,8 @@ function renderMessages() {
 function updateActiveFriendMeta() {
   const friend = state.friends.find((item) => item.username === state.activeFriend);
   if (!friend) {
-    if (elements.chatTitle) elements.chatTitle.textContent = "Choose a friend";
-    if (elements.chatSubtitle) elements.chatSubtitle.textContent = "Accept a request or choose a friend from the list.";
+    if (elements.chatTitle) elements.chatTitle.textContent = "Select a friend";
+    if (elements.chatSubtitle) elements.chatSubtitle.textContent = "Accept a request or choose a person from the list.";
     if (elements.chatAvatar) elements.chatAvatar.textContent = "DM";
     if (elements.chatStatus) elements.chatStatus.textContent = "Offline";
     if (elements.composerInput) elements.composerInput.disabled = true;
@@ -289,9 +444,9 @@ async function selectFriend(username) {
   state.activeFriend = username;
   renderFriends();
   updateActiveFriendMeta();
-  connectSocket(username);
   renderMessages();
-  toggleSidebar(false);
+  connectSocket(username);
+  if (window.innerWidth < 960) toggleSidebar(false);
 }
 
 async function loadFriends() {
@@ -312,23 +467,30 @@ async function loadRequests() {
 }
 
 async function refreshSession() {
-  state.session = await api("/api/session");
-  if (!state.session.authenticated) {
+  const session = await api("/api/session");
+  state.session = session;
+
+  if (!session.authenticated) {
     elements.authShell?.classList.remove("hidden");
     elements.appShell?.classList.add("hidden");
+    elements.sidebarToggle?.classList.add("hidden");
     disconnectSocket();
     return false;
   }
 
   elements.authShell?.classList.add("hidden");
   elements.appShell?.classList.remove("hidden");
-  if (elements.userAvatar) elements.userAvatar.textContent = state.session.user.initials || "??";
-  if (elements.userName) elements.userName.textContent = state.session.user.display_name || state.session.user.username;
-  if (elements.userHandle) elements.userHandle.textContent = `@${state.session.user.username}`;
+  elements.sidebarToggle?.classList.remove("hidden");
+
+  if (elements.userAvatar) elements.userAvatar.textContent = session.user.initials || "??";
+  if (elements.userName) elements.userName.textContent = session.user.display_name || session.user.username;
+  if (elements.userHandle) elements.userHandle.textContent = `@${session.user.username}`;
 
   await Promise.all([loadFriends(), loadRequests()]);
   if (!state.activeFriend && state.friends.length) {
     await selectFriend(state.friends[0].username);
+  } else {
+    renderMessages();
   }
   return true;
 }
@@ -338,7 +500,9 @@ async function submitAuth(path, formElement) {
   try {
     await api(path, { method: "POST", body: JSON.stringify(payload) });
     if (elements.authError) elements.authError.textContent = "";
+    formElement.reset();
     await refreshSession();
+    setStatus("Signed in");
   } catch (error) {
     if (elements.authError) elements.authError.textContent = error.message;
   }
@@ -354,7 +518,7 @@ async function handleFriendAdd(event) {
       body: JSON.stringify({ username }),
     });
     elements.friendUsername.value = "";
-    setStatus("Friend request sent.");
+    setStatus(`Friend request sent to @${username}.`);
   } catch (error) {
     setStatus(error.message);
   }
@@ -382,8 +546,11 @@ async function handleComposerSubmit(event) {
 async function handleFileUpload(event) {
   const file = event.target.files?.[0];
   if (!file || !state.activeFriend) return;
+
   const body = new FormData();
   body.append("file", file);
+  setStatus(`Uploading ${file.name}...`);
+
   try {
     await api(`/api/direct/${state.activeFriend}/files`, { method: "POST", body });
     setStatus(`File "${file.name}" sent.`);
@@ -397,7 +564,7 @@ async function handleFileUpload(event) {
 function autoresizeComposer() {
   if (!elements.composerInput) return;
   elements.composerInput.style.height = "auto";
-  elements.composerInput.style.height = `${Math.min(elements.composerInput.scrollHeight, 100)}px`;
+  elements.composerInput.style.height = `${Math.min(elements.composerInput.scrollHeight, 140)}px`;
 }
 
 async function logout() {
@@ -408,8 +575,10 @@ async function logout() {
   state.activeFriend = null;
   state.messagesByFriend.clear();
   disconnectSocket();
+  closeViewer();
   elements.authShell?.classList.remove("hidden");
   elements.appShell?.classList.add("hidden");
+  elements.sidebarToggle?.classList.add("hidden");
   switchAuthTab("login");
   renderFriends();
   renderRequests();
@@ -436,7 +605,7 @@ function bindEvents() {
   elements.composerInput?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      elements.composerForm.requestSubmit();
+      elements.composerForm?.requestSubmit();
     }
   });
   elements.fileBtn?.addEventListener("click", () => elements.fileInput?.click());
@@ -445,15 +614,27 @@ function bindEvents() {
   elements.sidebarClose?.addEventListener("click", () => toggleSidebar(false));
   elements.themeBtn?.addEventListener("click", toggleTheme);
   elements.themeBtnApp?.addEventListener("click", toggleTheme);
+  elements.viewerClose?.addEventListener("click", closeViewer);
+  elements.viewerModal?.addEventListener("click", (event) => {
+    if (event.target === elements.viewerModal) closeViewer();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.viewerModal?.open) {
+      closeViewer();
+    }
+  });
 }
 
 async function init() {
+  applyTheme(state.theme);
   bindEvents();
   switchAuthTab("login");
   renderFriends();
   renderRequests();
   renderMessages();
   updateActiveFriendMeta();
+  setStatus("Ready for login");
+
   try {
     await refreshSession();
   } catch {

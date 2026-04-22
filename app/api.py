@@ -52,13 +52,23 @@ import secrets
 
 T = TypeVar("T")
 USERNAME_PATTERN = re.compile(r"[^a-z0-9_]+")
-MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
-ALLOWED_ATTACHMENT_TYPES = {
+MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024
+INLINE_ATTACHMENT_TYPES = {
     "image/jpeg",
+    "image/gif",
     "image/png",
     "image/webp",
+    "video/mp4",
+    "video/webm",
     "application/pdf",
+    "application/json",
+    "text/css",
+    "text/csv",
+    "text/html",
+    "text/javascript",
+    "text/markdown",
     "text/plain",
+    "text/x-python",
     "application/zip",
     "application/x-zip-compressed",
 }
@@ -114,6 +124,12 @@ def user_to_identity(user: User) -> UserIdentity:
     )
 
 
+def normalize_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def identity_to_user_schema(identity: UserIdentity) -> UserRead:
     return UserRead(
         id=identity.id,
@@ -130,7 +146,7 @@ def user_to_schema(user: User) -> UserRead:
         username=user.username,
         display_name=user.display_name,
         initials=initials_for_name(user.display_name),
-        created_at=user.created_at,
+        created_at=normalize_datetime(user.created_at),
     )
 
 
@@ -140,8 +156,8 @@ def friend_request_to_schema(request_obj: FriendRequest) -> FriendRequestRead:
         requester=user_to_schema(request_obj.requester),
         addressee=user_to_schema(request_obj.addressee),
         status=request_obj.status,
-        created_at=request_obj.created_at,
-        responded_at=request_obj.responded_at,
+        created_at=normalize_datetime(request_obj.created_at),
+        responded_at=normalize_datetime(request_obj.responded_at) if request_obj.responded_at else None,
     )
 
 
@@ -156,7 +172,7 @@ def direct_message_to_schema(message: DirectMessage) -> DirectMessageRead:
         attachment_url=attachment_url,
         attachment_size=message.attachment_size,
         attachment_mime_type=message.attachment_mime_type,
-        sent_at=message.sent_at,
+        sent_at=normalize_datetime(message.sent_at),
     )
 
 
@@ -426,7 +442,7 @@ def validate_upload(file: UploadFile, file_size: int) -> None:
     if file_size > MAX_ATTACHMENT_SIZE:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is too large.")
     mime_type = (file.content_type or "application/octet-stream").lower()
-    if mime_type not in ALLOWED_ATTACHMENT_TYPES:
+    if mime_type not in INLINE_ATTACHMENT_TYPES and not mime_type.startswith("text/"):
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="File type is not allowed.")
 
 
@@ -556,7 +572,8 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         return HealthRead(status="ok", database_backend=detect_database_backend(resolved_settings.database_url))
 
     @app.get("/api/session", response_model=SessionRead)
-    def session_info(request: Request) -> SessionRead:
+    def session_info(request: Request, response: Response) -> SessionRead:
+        response.headers["Cache-Control"] = "no-store"
         try:
             identity = current_identity_from_request(request, database, session_manager, resolved_settings)
         except HTTPException:
@@ -565,6 +582,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
 
     @app.post("/api/auth/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
     def register(payload: AuthRequest, request: Request, response: Response) -> UserRead:
+        response.headers["Cache-Control"] = "no-store"
         client_key = extract_client_key(request, payload.username)
         try:
             rate_limiter.hit(
@@ -580,6 +598,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
 
     @app.post("/api/auth/login", response_model=UserRead)
     def login(payload: AuthRequest, request: Request, response: Response) -> UserRead:
+        response.headers["Cache-Control"] = "no-store"
         client_key = extract_client_key(request, payload.username)
         try:
             rate_limiter.hit(

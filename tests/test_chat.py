@@ -52,6 +52,8 @@ def test_frontend_and_auth_flow(tmp_path) -> None:
         session_response = client.get("/api/session")
         assert session_response.json()["authenticated"] is True
         assert session_response.json()["user"]["username"] == "alice_dev"
+        second_session_response = client.get("/api/session")
+        assert second_session_response.json()["authenticated"] is True
 
 
 def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
@@ -104,6 +106,7 @@ def test_friend_request_accept_and_direct_chat(tmp_path) -> None:
         history_response = alice_client.get("/api/direct/bob_dev/messages")
         assert history_response.status_code == 200
         assert history_response.json()[0]["content"] == "Hello Bob"
+        assert history_response.json()[0]["sent_at"].endswith(("Z", "+00:00"))
 
 
 def test_rejects_weak_passwords(tmp_path) -> None:
