@@ -183,6 +183,17 @@ input, textarea {
   margin-bottom: 12px;
 }
 
+.sidebar-top {
+  align-items: flex-start;
+}
+
+.sidebar-brand-center {
+  flex: 1;
+  text-align: center;
+  padding-top: 10px;
+  margin-left: 64px;
+}
+
 .auth-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -280,6 +291,7 @@ input, textarea {
   display: flex;
   gap: 8px;
   margin-left: auto;
+  margin-top: 8px;
 }
 
 .me {
@@ -577,6 +589,12 @@ html[data-theme="dark"] .presence-dot {
   margin-bottom: 6px;
 }
 
+.chat-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .message-text {
   white-space: pre-wrap;
   word-break: break-word;
@@ -746,6 +764,10 @@ html[data-theme="dark"] .presence-dot {
   padding: 14px;
 }
 
+#remote-audio {
+  display: none;
+}
+
 .viewer-topbar {
   margin-bottom: 10px;
 }
@@ -822,5 +844,15 @@ html[data-theme="dark"] .presence-dot {
   .inline-file-card,
   .attachment-card {
     max-width: 100%;
+  }
+
+  .sidebar-brand-center {
+    margin-left: 0;
+    text-align: left;
+    padding-top: 4px;
+  }
+
+  .chat-right {
+    gap: 6px;
   }
 }

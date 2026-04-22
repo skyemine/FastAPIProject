@@ -76,7 +76,7 @@
   <div class="app-shell hidden" id="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="Бічна панель">
       <header class="sidebar-top">
-        <div class="brand">Prism</div>
+        <div class="brand sidebar-brand-center">Prism</div>
         <div class="side-actions">
           <button class="topbtn" id="theme-btn-app" type="button">Theme</button>
           <button class="topbtn" id="sidebar-close" type="button" aria-label="Закрити">x</button>
@@ -91,6 +91,7 @@
           <div class="me-handle" id="user-handle">@guest</div>
         </div>
         <div class="me-actions">
+          <button class="topbtn" id="account-btn" type="button">Акаунт</button>
           <button class="topbtn" id="avatar-btn" type="button">Аватарка</button>
           <button class="topbtn" id="logout-btn" type="button">Вийти</button>
         </div>
@@ -125,6 +126,7 @@
           </div>
         </div>
         <div class="chat-right">
+          <button class="topbtn" id="call-btn" type="button" disabled>Дзвінок</button>
           <span class="status" id="chat-status">Офлайн</span>
         </div>
       </header>
@@ -162,6 +164,42 @@
       <div class="viewer-body" id="viewer-body"></div>
     </div>
   </dialog>
+
+  <dialog class="viewer" id="account-modal">
+    <div class="viewer-card">
+      <header class="topbar viewer-topbar">
+        <div>
+          <div class="brand">Акаунт</div>
+          <div class="viewer-meta">Зміна ніку, імені та пароля</div>
+        </div>
+        <div class="side-actions">
+          <button class="topbtn" id="account-close" type="button">x</button>
+        </div>
+      </header>
+      <form class="auth-form active" id="account-form" autocomplete="on">
+        <label class="field">
+          <span>Логін</span>
+          <input id="account-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span>Ім'я</span>
+          <input id="account-display-name" name="display_name" autocomplete="name" />
+        </label>
+        <label class="field">
+          <span>Поточний пароль</span>
+          <input id="account-current-password" name="current_password" type="password" autocomplete="current-password" />
+        </label>
+        <label class="field">
+          <span>Новий пароль</span>
+          <input id="account-new-password" name="new_password" type="password" autocomplete="new-password" />
+        </label>
+        <button class="topbtn" id="toggle-password-btn" type="button">Показати пароль</button>
+        <button class="primary" type="submit">Зберегти</button>
+      </form>
+    </div>
+  </dialog>
+
+  <audio id="remote-audio" autoplay playsinline></audio>
 
   <script src="/assets/app.js" defer></script>
 </body>

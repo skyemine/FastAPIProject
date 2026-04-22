@@ -11,6 +11,13 @@ class AuthRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=40)
 
 
+class ProfileUpdateRequest(BaseModel):
+    username: str | None = Field(default=None, min_length=3, max_length=32)
+    display_name: str | None = Field(default=None, max_length=40)
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
 class UserRead(BaseModel):
     id: int
     username: str

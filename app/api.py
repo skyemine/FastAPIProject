@@ -32,6 +32,7 @@ from .schemas import (
     FriendRequestCreate,
     FriendRequestRead,
     HealthRead,
+    ProfileUpdateRequest,
     SessionRead,
     UserRead,
     UserSearchRead,
@@ -223,6 +224,36 @@ def authenticate_user(session: Session, payload: AuthRequest) -> UserIdentity:
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password.")
     return user_to_identity(user)
+
+
+def update_profile(session: Session, current_user_id: int, payload: ProfileUpdateRequest) -> UserRead:
+    user = session.get(User, current_user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User session is invalid.")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect.")
+
+    if payload.username is not None and payload.username.strip():
+        normalized_username = normalize_username(payload.username)
+        if normalized_username != user.username:
+            existing_user = session.scalar(select(User).where(User.username == normalized_username))
+            if existing_user is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
+            user.username = normalized_username
+
+    if payload.display_name is not None:
+        user.display_name = normalize_display_name(payload.display_name, user.username)
+
+    if payload.new_password:
+        try:
+            validate_password_strength(payload.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        user.password_hash = hash_password(payload.new_password)
+
+    session.commit()
+    session.refresh(user)
+    return user_to_schema(user)
 
 
 def extract_client_key(request: Request, username: str | None = None) -> str:
@@ -701,6 +732,17 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         clear_session_cookie(response, resolved_settings)
         return response
 
+    @app.patch("/api/users/me", response_model=UserRead)
+    def update_current_user(payload: ProfileUpdateRequest, request: Request, response: Response) -> UserRead:
+        response.headers["Cache-Control"] = "no-store"
+        identity = current_identity_from_request(request, database, session_manager, resolved_settings)
+        updated_user = run_with_session(database, lambda session: update_profile(session, identity.id, payload))
+        refreshed_identity = run_with_session(database, lambda session: load_identity(session, identity.id))
+        if refreshed_identity is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User was not found.")
+        issue_session_cookie(response, session_manager, resolved_settings, refreshed_identity)
+        return updated_user
+
     @app.post("/api/users/me/avatar", response_model=UserRead)
     async def upload_avatar(request: Request, file: UploadFile = File(...)) -> UserRead:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
@@ -902,6 +944,20 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
                     payload = json.loads(raw_payload)
                 except json.JSONDecodeError:
                     await websocket.send_json({"type": "error", "detail": "Payload must be valid JSON."})
+                    continue
+
+                message_type = str(payload.get("type", "message")).strip()
+                if message_type in {"call-offer", "call-answer", "ice-candidate", "call-end", "call-decline"}:
+                    signal_payload = {
+                        "type": message_type,
+                        "sender_username": identity.username,
+                        "sender_display_name": identity.display_name,
+                    }
+                    if "sdp" in payload:
+                        signal_payload["sdp"] = payload["sdp"]
+                    if "candidate" in payload:
+                        signal_payload["candidate"] = payload["candidate"]
+                    await manager.broadcast(channel, signal_payload)
                     continue
 
                 content = str(payload.get("content", "")).strip()

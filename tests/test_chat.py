@@ -192,3 +192,28 @@ def test_avatar_upload_persists_in_session(tmp_path) -> None:
 
         avatar_response = client.get(payload["avatar_url"])
         assert avatar_response.status_code == 200
+
+
+def test_profile_update_changes_username_and_password(tmp_path) -> None:
+    app = create_app(settings=build_settings(tmp_path))
+
+    with TestClient(app) as client:
+        register(client, "profile_dev", "Profile User")
+        update_response = client.patch(
+            "/api/users/me",
+            json={
+                "username": "profile_next",
+                "display_name": "Profile Next",
+                "current_password": "Supersecure123",
+                "new_password": "EvenStronger123",
+            },
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["username"] == "profile_next"
+
+        client.post("/api/auth/logout")
+        login_response = client.post(
+            "/api/auth/login",
+            json={"username": "profile_next", "password": "EvenStronger123"},
+        )
+        assert login_response.status_code == 200
