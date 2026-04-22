@@ -2,18 +2,14 @@
 <html lang="uk" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#ffffff" />
-
   <title>Prism</title>
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
-
 <body>
   <div class="glow-background" aria-hidden="true">
     <div class="glow-orb blue"></div>
@@ -23,8 +19,8 @@
   <div class="auth-shell" id="auth-shell">
     <div class="auth-card">
       <header class="topbar">
-        <div class="brand">   Prism</div>
-        <button class="topbtn" id="theme-btn" type="button">Тема</button>
+        <div class="brand">Prism</div>
+        <button class="topbtn" id="theme-btn" type="button">Theme</button>
       </header>
 
       <div class="auth-tabs" role="tablist" aria-label="Авторизація">
@@ -53,7 +49,7 @@
         </label>
 
         <label class="field">
-          <span>Ім’я</span>
+          <span>Ім'я</span>
           <input name="display_name" autocomplete="name" />
         </label>
 
@@ -77,15 +73,13 @@
     </svg>
   </button>
 
-  <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
-
   <div class="app-shell hidden" id="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="Бічна панель">
       <header class="sidebar-top">
         <div class="brand">Prism</div>
         <div class="side-actions">
-          <button class="topbtn" id="theme-btn-app" type="button">Тема</button>
-          <button class="topbtn" id="sidebar-close" type="button" aria-label="Закрити">✕</button>
+          <button class="topbtn" id="theme-btn-app" type="button">Theme</button>
+          <button class="topbtn" id="sidebar-close" type="button" aria-label="Закрити">x</button>
         </div>
       </header>
 
@@ -135,6 +129,8 @@
 
       <footer class="input-area">
         <form class="input-wrapper" id="composer-form" autocomplete="off">
+          <input id="file-input" type="file" hidden />
+          <button class="send-btn secondary" id="file-btn" type="button" disabled aria-label="Надіслати файл">+</button>
           <textarea id="composer-input" rows="1" maxlength="2000" placeholder="Повідомлення..." disabled></textarea>
           <button class="send-btn" id="send-btn" type="submit" disabled aria-label="Надіслати">
             <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true">

@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, inspect as sa_inspect, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -48,9 +48,20 @@ from .security import (
     validate_password_strength,
     verify_password,
 )
+import secrets
 
 T = TypeVar("T")
 USERNAME_PATTERN = re.compile(r"[^a-z0-9_]+")
+MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+ALLOWED_ATTACHMENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+    "text/plain",
+    "application/zip",
+    "application/x-zip-compressed",
+}
 
 
 @dataclass(slots=True)
@@ -66,15 +77,11 @@ def direct_channel_key(user_a: int, user_b: int) -> str:
     return f"dm:{ordered[0]}:{ordered[1]}"
 
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def normalize_username(value: str) -> str:
     normalized = USERNAME_PATTERN.sub("", value.strip().lower())
     if len(normalized) < 3:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Username must contain at least 3 latin letters, digits, or underscores.",
         )
     return normalized[:32]
@@ -139,11 +146,16 @@ def friend_request_to_schema(request_obj: FriendRequest) -> FriendRequestRead:
 
 
 def direct_message_to_schema(message: DirectMessage) -> DirectMessageRead:
+    attachment_url = f"/api/files/{message.attachment_token}" if message.attachment_token else None
     return DirectMessageRead(
         id=message.id,
         sender_username=message.sender.username,
         sender_display_name=message.sender.display_name,
         content=message.content,
+        attachment_name=message.attachment_name,
+        attachment_url=attachment_url,
+        attachment_size=message.attachment_size,
+        attachment_mime_type=message.attachment_mime_type,
         sent_at=message.sent_at,
     )
 
@@ -161,7 +173,7 @@ def create_user(session: Session, payload: AuthRequest) -> UserIdentity:
     try:
         validate_password_strength(payload.password)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     existing_user = session.scalar(select(User).where(User.username == username))
     if existing_user is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken.")
@@ -182,6 +194,17 @@ def authenticate_user(session: Session, payload: AuthRequest) -> UserIdentity:
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password.")
     return user_to_identity(user)
+
+
+def extract_client_key(request: Request, username: str | None = None) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        ip_address = forwarded_for.split(",")[0].strip()
+    else:
+        ip_address = request.client.host if request.client else "unknown"
+    if username:
+        return f"{ip_address}:{normalize_username(username)}"
+    return ip_address
 
 
 def are_friends(session: Session, user_id: int, friend_id: int) -> bool:
@@ -363,6 +386,76 @@ def create_direct_message(session: Session, current_user_id: int, target_usernam
     return direct_message_to_schema(message)
 
 
+def create_direct_file_message(
+    session: Session,
+    current_user_id: int,
+    target_username: str,
+    file_name: str,
+    stored_path: str,
+    mime_type: str,
+    file_size: int,
+) -> DirectMessageRead:
+    target_user = ensure_friend_or_404(session, current_user_id, target_username)
+    sender = session.get(User, current_user_id)
+    if sender is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User session is invalid.")
+
+    message = DirectMessage(
+        sender_id=current_user_id,
+        recipient_id=target_user.id,
+        content="",
+        attachment_name=file_name,
+        attachment_path=stored_path,
+        attachment_size=file_size,
+        attachment_mime_type=mime_type,
+        attachment_token=secrets.token_urlsafe(24),
+    )
+    session.add(message)
+    session.commit()
+    session.refresh(message)
+    message.sender = sender
+    message.recipient = target_user
+    return direct_message_to_schema(message)
+
+
+def validate_upload(file: UploadFile, file_size: int) -> None:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File name is missing.")
+    if file_size <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
+    if file_size > MAX_ATTACHMENT_SIZE:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is too large.")
+    mime_type = (file.content_type or "application/octet-stream").lower()
+    if mime_type not in ALLOWED_ATTACHMENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="File type is not allowed.")
+
+
+def ensure_sqlite_schema_compatibility(database: Database) -> None:
+    if database.engine.url.get_backend_name() != "sqlite":
+        return
+
+    database_path = database.engine.url.database
+    if not database_path:
+        return
+
+    path = Path(database_path)
+    if not path.exists():
+        return
+
+    inspector = sa_inspect(database.engine)
+    required_tables = {"users", "friend_requests", "friendships", "direct_messages"}
+    existing_tables = set(inspector.get_table_names())
+    direct_message_columns = {column["name"] for column in inspector.get_columns("direct_messages")} if "direct_messages" in existing_tables else set()
+    required_columns = {"attachment_name", "attachment_path", "attachment_size", "attachment_mime_type", "attachment_token"}
+
+    if required_tables.issubset(existing_tables) and required_columns.issubset(direct_message_columns):
+        return
+
+    backup_path = path.with_suffix(f".backup-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}{path.suffix}")
+    database.engine.dispose()
+    path.replace(backup_path)
+
+
 def issue_session_cookie(response: Response, session_manager: SessionManager, settings: Settings, user: UserIdentity) -> None:
     response.set_cookie(
         key=settings.session_cookie_name,
@@ -419,6 +512,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        ensure_sqlite_schema_compatibility(database)
         database.init_db()
         yield
 
@@ -436,12 +530,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         hsts_max_age=resolved_settings.hsts_max_age_seconds,
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
-    "fastapiproject-rnrp.onrender.com",
-    "*.onrender.com",
-    "localhost",
-    "127.0.0.1",
-])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved_settings.allowed_hosts)
 
 
     if resolved_settings.allowed_origins:
@@ -476,10 +565,10 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
 
     @app.post("/api/auth/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
     def register(payload: AuthRequest, request: Request, response: Response) -> UserRead:
-        ip_address = request.client.host if request.client else "unknown"
+        client_key = extract_client_key(request, payload.username)
         try:
             rate_limiter.hit(
-                key=f"register:{ip_address}",
+                key=f"register:{client_key}",
                 limit=resolved_settings.auth_rate_limit_count,
                 window_seconds=resolved_settings.auth_rate_limit_window_seconds,
             )
@@ -491,10 +580,10 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
 
     @app.post("/api/auth/login", response_model=UserRead)
     def login(payload: AuthRequest, request: Request, response: Response) -> UserRead:
-        ip_address = request.client.host if request.client else "unknown"
+        client_key = extract_client_key(request, payload.username)
         try:
             rate_limiter.hit(
-                key=f"login:{ip_address}",
+                key=f"login:{client_key}",
                 limit=resolved_settings.auth_rate_limit_count,
                 window_seconds=resolved_settings.auth_rate_limit_window_seconds,
             )
@@ -548,6 +637,72 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
             database,
             lambda session: get_direct_messages(session, identity.id, friend_username, resolved_settings.message_history_limit),
         )
+
+    @app.post("/api/direct/{friend_username}/files", response_model=DirectMessageRead, status_code=status.HTTP_201_CREATED)
+    async def upload_direct_file(friend_username: str, request: Request, file: UploadFile = File(...)) -> DirectMessageRead:
+        identity = current_identity_from_request(request, database, session_manager, resolved_settings)
+        uploads_dir = Path("uploads")
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_name = Path(file.filename or "attachment.bin").name
+        suffix = Path(safe_name).suffix
+        stored_name = f"{secrets.token_hex(16)}{suffix}"
+        stored_path = uploads_dir / stored_name
+
+        size = 0
+        with stored_path.open("wb") as destination:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_ATTACHMENT_SIZE:
+                    destination.close()
+                    stored_path.unlink(missing_ok=True)
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is too large.")
+                destination.write(chunk)
+
+        validate_upload(file, size)
+        saved_message = run_with_session(
+            database,
+            lambda session: create_direct_file_message(
+                session,
+                identity.id,
+                friend_username,
+                safe_name,
+                str(stored_path),
+                (file.content_type or "application/octet-stream").lower(),
+                size,
+            ),
+        )
+        target_identity = run_with_session(
+            database, lambda session: user_to_identity(ensure_friend_or_404(session, identity.id, friend_username))
+        )
+        await manager.broadcast(
+            direct_channel_key(identity.id, target_identity.id),
+            {"type": "message", "message": saved_message.model_dump(mode="json")},
+        )
+        return saved_message
+
+    @app.get("/api/files/{attachment_token}")
+    def download_attachment(attachment_token: str, request: Request) -> FileResponse:
+        identity = current_identity_from_request(request, database, session_manager, resolved_settings)
+
+        def load_attachment(session: Session) -> DirectMessage:
+            message = session.scalar(
+                select(DirectMessage)
+                .options(selectinload(DirectMessage.sender), selectinload(DirectMessage.recipient))
+                .where(DirectMessage.attachment_token == attachment_token)
+            )
+            if message is None or not message.attachment_path:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+            participant_ids = {message.sender_id, message.recipient_id}
+            if identity.id not in participant_ids:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this file.")
+            return message
+
+        message = run_with_session(database, load_attachment)
+        file_path = Path(message.attachment_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File content is missing.")
+        return FileResponse(file_path, filename=message.attachment_name or file_path.name, media_type=message.attachment_mime_type)
 
     @app.websocket("/ws/direct/{friend_username}")
     async def direct_socket(websocket: WebSocket, friend_username: str) -> None:

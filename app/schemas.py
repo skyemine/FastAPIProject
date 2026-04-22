@@ -62,6 +62,10 @@ class DirectMessageRead(BaseModel):
     sender_username: str
     sender_display_name: str
     content: str
+    attachment_name: str | None = None
+    attachment_url: str | None = None
+    attachment_size: int | None = None
+    attachment_mime_type: str | None = None
     sent_at: datetime
 
 

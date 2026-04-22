@@ -86,7 +86,12 @@ class DirectMessage(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    content: Mapped[str] = mapped_column(Text())
+    content: Mapped[str] = mapped_column(Text(), default="")
+    attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_size: Mapped[int | None] = mapped_column(nullable=True)
+    attachment_mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    attachment_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
     sender: Mapped[User] = relationship(foreign_keys=[sender_id], back_populates="messages_sent")

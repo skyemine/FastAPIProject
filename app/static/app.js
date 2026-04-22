@@ -3,14 +3,9 @@ const state = {
   friends: [],
   requests: [],
   activeFriend: null,
-  activeFriendMeta: null,
   messagesByFriend: new Map(),
-  socket: null
+  socket: null,
 };
-
-const MOBILE_WIDTH = 860;
-const THEME_KEY = "prism_theme";
-const THEMES = ["light", "dark"];
 
 const elements = {
   authShell: document.getElementById("auth-shell"),
@@ -24,7 +19,7 @@ const elements = {
   userAvatar: document.getElementById("user-avatar"),
   userName: document.getElementById("user-name"),
   userHandle: document.getElementById("user-handle"),
-  friendAddBtn: document.getElementById("friend-add-btn"),
+  friendForm: document.getElementById("friend-form"),
   friendUsername: document.getElementById("friend-username"),
   requestsList: document.getElementById("requests-list"),
   friendsList: document.getElementById("friends-list"),
@@ -39,76 +34,58 @@ const elements = {
   chatStatus: document.getElementById("chat-status"),
   sidebar: document.getElementById("sidebar"),
   sidebarToggle: document.getElementById("sidebar-toggle"),
-  sidebarOverlay: document.getElementById("sidebar-overlay"),
   sidebarClose: document.getElementById("sidebar-close"),
   themeBtn: document.getElementById("theme-btn"),
-  themeBtnApp: document.getElementById("theme-btn-app")
+  themeBtnApp: document.getElementById("theme-btn-app"),
+  fileInput: document.getElementById("file-input"),
+  fileBtn: document.getElementById("file-btn"),
 };
-
-function isMobileLayout() {
-  return window.matchMedia(`(max-width: ${MOBILE_WIDTH}px)`).matches;
-}
-
-function applyTheme(theme) {
-  const t = THEMES.includes(theme) ? theme : "light";
-  document.documentElement.setAttribute("data-theme", t);
-  localStorage.setItem(THEME_KEY, t);
-  const label = t[0].toUpperCase() + t.slice(1);
-  if (elements.themeBtn) elements.themeBtn.textContent = `Тема: ${label}`;
-  if (elements.themeBtnApp) elements.themeBtnApp.textContent = label;
-}
-
-function nextTheme() {
-  const current = document.documentElement.getAttribute("data-theme") || "light";
-  const idx = THEMES.indexOf(current);
-  applyTheme(THEMES[(idx + 1) % THEMES.length]);
-}
-
-function initTheme() {
-  const saved = localStorage.getItem(THEME_KEY);
-  // migrate old petal-soft saves to light
-  const valid = saved && THEMES.includes(saved) ? saved : "light";
-  applyTheme(valid);
-}
 
 function switchAuthTab(mode) {
   const loginActive = mode === "login";
-  elements.loginTab.classList.toggle("active", loginActive);
-  elements.registerTab.classList.toggle("active", !loginActive);
-  elements.loginForm.classList.toggle("active", loginActive);
-  elements.registerForm.classList.toggle("active", !loginActive);
-  elements.loginTab.setAttribute("aria-selected", String(loginActive));
-  elements.registerTab.setAttribute("aria-selected", String(!loginActive));
-  elements.authError.textContent = "";
+  elements.loginTab?.classList.toggle("active", loginActive);
+  elements.registerTab?.classList.toggle("active", !loginActive);
+  elements.loginForm?.classList.toggle("active", loginActive);
+  elements.registerForm?.classList.toggle("active", !loginActive);
+  if (elements.authError) elements.authError.textContent = "";
 }
 
-function toggleSidebar(show) {
-  const isOpen = show !== undefined ? show : !elements.sidebar.classList.contains("open");
-  elements.sidebar.classList.toggle("open", isOpen);
-  if (elements.sidebarToggle) elements.sidebarToggle.setAttribute("aria-expanded", String(isOpen));
+function toggleSidebar(forceOpen) {
+  if (!elements.sidebar) return;
+  const shouldOpen = forceOpen ?? !elements.sidebar.classList.contains("open");
+  elements.sidebar.classList.toggle("open", shouldOpen);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  document.documentElement.setAttribute("data-theme", current === "dark" ? "light" : "dark");
 }
 
 async function api(path, options = {}) {
+  const hasFormData = options.body instanceof FormData;
   const response = await fetch(path, {
     credentials: "same-origin",
+    ...options,
     headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
+      ...(hasFormData ? {} : { "Content-Type": "application/json" }),
+      ...(options.headers || {}),
     },
-    ...options
   });
 
-  if (response.status === 204) return null;
+  if (response.status === 204) {
+    return null;
+  }
 
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
-
-  if (!response.ok) throw new Error(payload?.detail || payload || "Request failed");
+  if (!response.ok) {
+    throw new Error(payload?.detail || payload || "Request failed");
+  }
   return payload;
 }
 
 function setStatus(message) {
-  elements.statusLine.textContent = message;
+  if (elements.statusLine) elements.statusLine.textContent = message;
 }
 
 function formatDate(value) {
@@ -118,11 +95,11 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
     day: "2-digit",
-    month: "short"
+    month: "short",
   });
 }
 
-function el(tag, className, text) {
+function createElement(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
@@ -130,93 +107,127 @@ function el(tag, className, text) {
 }
 
 function renderRequests() {
+  if (!elements.requestsList) return;
   elements.requestsList.innerHTML = "";
   if (!state.requests.length) {
-    elements.requestsList.appendChild(el("div", "empty-small", "Немає вхідних запитів."));
+    elements.requestsList.appendChild(createElement("div", "empty-small", "No incoming requests."));
     return;
   }
 
   for (const item of state.requests) {
-    const card = el("div", "list-card");
-    const user = el("div", "list-user");
-    user.appendChild(el("div", "avatar mini", item.requester.initials || "??"));
-    const meta = el("div");
-    meta.appendChild(el("strong", "", item.requester.display_name || item.requester.username));
-    meta.appendChild(el("span", "", `@${item.requester.username}`));
+    const card = createElement("div", "list-card");
+    const user = createElement("div", "list-user");
+    user.appendChild(createElement("div", "avatar mini", item.requester.initials || "??"));
+    const meta = createElement("div");
+    meta.appendChild(createElement("strong", "", item.requester.display_name || item.requester.username));
+    meta.appendChild(createElement("span", "", `@${item.requester.username}`));
     user.appendChild(meta);
 
-    const actions = el("div", "actions-row");
-    const acceptBtn = el("button", "primary-btn small", "Прийняти");
+    const actions = createElement("div", "actions-row");
+    const acceptBtn = createElement("button", "primary-btn small", "Accept");
     acceptBtn.type = "button";
     acceptBtn.addEventListener("click", () => handleFriendRequest(item.id, "accept"));
-
-    const rejectBtn = el("button", "ghost-btn small", "Відхилити");
+    const rejectBtn = createElement("button", "ghost-btn small", "Decline");
     rejectBtn.type = "button";
     rejectBtn.addEventListener("click", () => handleFriendRequest(item.id, "reject"));
+    actions.append(acceptBtn, rejectBtn);
 
-    actions.appendChild(acceptBtn);
-    actions.appendChild(rejectBtn);
-    card.appendChild(user);
-    card.appendChild(actions);
+    card.append(user, actions);
     elements.requestsList.appendChild(card);
   }
 }
 
 function renderFriends() {
+  if (!elements.friendsList) return;
   elements.friendsList.innerHTML = "";
   if (!state.friends.length) {
-    const empty = el("div", "empty-small");
-    empty.innerHTML = "Друзів ще немає.<br>Додайте когось за username.";
-    elements.friendsList.appendChild(empty);
+    elements.friendsList.appendChild(createElement("div", "empty-small", "No friends yet. Add somebody by username."));
     return;
   }
 
   for (const friend of state.friends) {
-    const button = el("button", "friend-item");
+    const button = createElement("button", "friend-item");
     button.type = "button";
     button.classList.toggle("active", friend.username === state.activeFriend);
 
-    const user = el("div", "list-user");
-    user.appendChild(el("div", "avatar mini", friend.initials || "??"));
-    const meta = el("div");
-    meta.appendChild(el("strong", "", friend.display_name || friend.username));
-    meta.appendChild(el("span", "", `@${friend.username}`));
+    const user = createElement("div", "list-user");
+    user.appendChild(createElement("div", "avatar mini", friend.initials || "??"));
+    const meta = createElement("div");
+    meta.appendChild(createElement("strong", "", friend.display_name || friend.username));
+    meta.appendChild(createElement("span", "", `@${friend.username}`));
     user.appendChild(meta);
-
-    const dot = el("span", `presence-dot ${friend.is_online ? "online" : ""}`);
     button.appendChild(user);
-    button.appendChild(dot);
+    button.appendChild(createElement("span", `presence-dot ${friend.is_online ? "online" : ""}`));
     button.addEventListener("click", () => selectFriend(friend.username));
     elements.friendsList.appendChild(button);
   }
 }
 
 function renderMessages() {
+  if (!elements.messageStream) return;
   elements.messageStream.innerHTML = "";
   const messages = state.messagesByFriend.get(state.activeFriend) || [];
-
   if (!messages.length) {
-    const empty = el("div", "empty-state");
-    empty.appendChild(el("strong", "", "Повідомлень ще немає"));
-    empty.appendChild(el("p", "", "Почніть розмову першими"));
+    const empty = createElement("div", "empty-state");
+    empty.appendChild(createElement("strong", "", "No messages yet"));
+    empty.appendChild(createElement("p", "", "Start the conversation or send a file."));
     elements.messageStream.appendChild(empty);
     return;
   }
 
   for (const message of messages) {
     const mine = state.session && message.sender_username === state.session.user.username;
-    const article = el("article", `message ${mine ? "mine" : ""}`);
-    const bubble = el("div", "message-bubble");
-    const head = el("div", "message-head");
-    head.appendChild(el("strong", "", message.sender_display_name || message.sender_username || "User"));
-    head.appendChild(el("span", "", formatDate(message.sent_at)));
+    const article = createElement("article", `message ${mine ? "mine" : ""}`);
+    const bubble = createElement("div", "message-bubble");
+    const head = createElement("div", "message-head");
+    head.appendChild(createElement("strong", "", message.sender_display_name || message.sender_username || "User"));
+    head.appendChild(createElement("span", "", formatDate(message.sent_at)));
     bubble.appendChild(head);
-    bubble.appendChild(el("div", "", message.content || ""));
+
+    if (message.content) {
+      bubble.appendChild(createElement("div", "message-text", message.content));
+    }
+
+    if (message.attachment_url) {
+      const attachment = createElement("a", "attachment-card");
+      attachment.href = message.attachment_url;
+      attachment.target = "_blank";
+      attachment.rel = "noreferrer";
+      attachment.appendChild(createElement("strong", "", message.attachment_name || "Attachment"));
+      const meta = [];
+      if (message.attachment_mime_type) meta.push(message.attachment_mime_type);
+      if (message.attachment_size) meta.push(`${Math.ceil(message.attachment_size / 1024)} KB`);
+      attachment.appendChild(createElement("span", "", meta.join(" • ")));
+      bubble.appendChild(attachment);
+    }
+
     article.appendChild(bubble);
     elements.messageStream.appendChild(article);
   }
 
   elements.messageStream.scrollTop = elements.messageStream.scrollHeight;
+}
+
+function updateActiveFriendMeta() {
+  const friend = state.friends.find((item) => item.username === state.activeFriend);
+  if (!friend) {
+    if (elements.chatTitle) elements.chatTitle.textContent = "Choose a friend";
+    if (elements.chatSubtitle) elements.chatSubtitle.textContent = "Accept a request or choose a friend from the list.";
+    if (elements.chatAvatar) elements.chatAvatar.textContent = "DM";
+    if (elements.chatStatus) elements.chatStatus.textContent = "Offline";
+    if (elements.composerInput) elements.composerInput.disabled = true;
+    if (elements.sendBtn) elements.sendBtn.disabled = true;
+    if (elements.fileBtn) elements.fileBtn.disabled = true;
+    return;
+  }
+
+  if (elements.chatTitle) elements.chatTitle.textContent = friend.display_name || friend.username;
+  if (elements.chatSubtitle) elements.chatSubtitle.textContent = `@${friend.username}`;
+  if (elements.chatAvatar) elements.chatAvatar.textContent = friend.initials || "??";
+  if (elements.chatStatus) elements.chatStatus.textContent = friend.is_online ? "Online" : "Offline";
+  if (elements.composerInput) elements.composerInput.disabled = false;
+  if (elements.sendBtn) elements.sendBtn.disabled = false;
+  if (elements.fileBtn) elements.fileBtn.disabled = false;
 }
 
 function disconnectSocket() {
@@ -226,42 +237,19 @@ function disconnectSocket() {
   }
 }
 
-function updateActiveFriendMeta() {
-  const friend = state.friends.find(item => item.username === state.activeFriend);
-  state.activeFriendMeta = friend || null;
-
-  if (!friend) {
-    elements.chatTitle.textContent = "Виберіть друга";
-    elements.chatSubtitle.textContent = "Прийміть запит або виберіть друга зі списку.";
-    elements.chatAvatar.textContent = "DM";
-    elements.chatStatus.textContent = "Офлайн";
-    elements.composerInput.disabled = true;
-    elements.sendBtn.disabled = true;
-    return;
-  }
-
-  elements.chatTitle.textContent = friend.display_name || friend.username;
-  elements.chatSubtitle.textContent = `@${friend.username}`;
-  elements.chatAvatar.textContent = friend.initials || "??";
-  elements.chatStatus.textContent = friend.is_online ? "Онлайн" : "Офлайн";
-  elements.composerInput.disabled = false;
-  elements.sendBtn.disabled = false;
-}
-
 function connectSocket(username) {
   disconnectSocket();
-  const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${protocol}://${location.host}/ws/chat/${username}`);
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(`${protocol}://${window.location.host}/ws/direct/${username}`);
   state.socket = socket;
+  setStatus(`Connecting to @${username}...`);
 
-  setStatus(`Підключення до @${username}...`);
-
-  socket.addEventListener("open", () => setStatus(`Чат з @${username} підключено`));
+  socket.addEventListener("open", () => setStatus(`Connected to @${username}`));
   socket.addEventListener("close", () => {
-    if (state.socket === socket) setStatus("З'єднання розірвано");
+    if (state.socket === socket) setStatus("Connection closed");
   });
 
-  socket.addEventListener("message", event => {
+  socket.addEventListener("message", (event) => {
     let payload;
     try {
       payload = JSON.parse(event.data);
@@ -271,9 +259,9 @@ function connectSocket(username) {
 
     if (payload.type === "history") {
       state.messagesByFriend.set(username, payload.messages || []);
-      const friend = state.friends.find(item => item.username === username);
+      const friend = state.friends.find((item) => item.username === username);
       if (friend && payload.friend) {
-        friend.is_online = !!payload.friend.is_online;
+        friend.is_online = Boolean(payload.friend.is_online);
         renderFriends();
         updateActiveFriendMeta();
       }
@@ -290,7 +278,9 @@ function connectSocket(username) {
       return;
     }
 
-    if (payload.type === "error") setStatus(payload.detail || "Помилка чату");
+    if (payload.type === "error") {
+      setStatus(payload.detail || "Chat error");
+    }
   });
 }
 
@@ -299,24 +289,21 @@ async function selectFriend(username) {
   state.activeFriend = username;
   renderFriends();
   updateActiveFriendMeta();
-  disconnectSocket();
   connectSocket(username);
   renderMessages();
-  if (isMobileLayout()) toggleSidebar(false);
-  setTimeout(() => elements.composerInput.focus(), 50);
+  toggleSidebar(false);
 }
 
 async function loadFriends() {
   state.friends = await api("/api/friends");
   renderFriends();
-  updateActiveFriendMeta();
 
-  if (state.activeFriend && !state.friends.find(item => item.username === state.activeFriend)) {
+  if (state.activeFriend && !state.friends.find((item) => item.username === state.activeFriend)) {
     state.activeFriend = null;
     disconnectSocket();
-    updateActiveFriendMeta();
-    renderMessages();
   }
+
+  updateActiveFriendMeta();
 }
 
 async function loadRequests() {
@@ -326,22 +313,23 @@ async function loadRequests() {
 
 async function refreshSession() {
   state.session = await api("/api/session");
-
   if (!state.session.authenticated) {
-    elements.authShell.classList.remove("hidden");
-    elements.appShell.classList.add("hidden");
+    elements.authShell?.classList.remove("hidden");
+    elements.appShell?.classList.add("hidden");
     disconnectSocket();
     return false;
   }
 
-  elements.authShell.classList.add("hidden");
-  elements.appShell.classList.remove("hidden");
-  elements.userAvatar.textContent = state.session.user.initials || "PR";
-  elements.userName.textContent = state.session.user.display_name || "Користувач";
-  elements.userHandle.textContent = `@${state.session.user.username}`;
+  elements.authShell?.classList.add("hidden");
+  elements.appShell?.classList.remove("hidden");
+  if (elements.userAvatar) elements.userAvatar.textContent = state.session.user.initials || "??";
+  if (elements.userName) elements.userName.textContent = state.session.user.display_name || state.session.user.username;
+  if (elements.userHandle) elements.userHandle.textContent = `@${state.session.user.username}`;
 
   await Promise.all([loadFriends(), loadRequests()]);
-  if (!state.activeFriend && state.friends.length) await selectFriend(state.friends[0].username);
+  if (!state.activeFriend && state.friends.length) {
+    await selectFriend(state.friends[0].username);
+  }
   return true;
 }
 
@@ -349,22 +337,24 @@ async function submitAuth(path, formElement) {
   const payload = Object.fromEntries(new FormData(formElement).entries());
   try {
     await api(path, { method: "POST", body: JSON.stringify(payload) });
-    elements.authError.textContent = "";
+    if (elements.authError) elements.authError.textContent = "";
     await refreshSession();
   } catch (error) {
-    elements.authError.textContent = error.message;
+    if (elements.authError) elements.authError.textContent = error.message;
   }
 }
 
 async function handleFriendAdd(event) {
-  if (event && event.preventDefault) event.preventDefault();
-  const payload = { username: elements.friendUsername.value.trim() };
-  if (!payload.username) return;
-
+  event.preventDefault();
+  const username = elements.friendUsername?.value.trim();
+  if (!username) return;
   try {
-    await api("/api/friend-requests", { method: "POST", body: JSON.stringify(payload) });
+    await api("/api/friend-requests", {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    });
     elements.friendUsername.value = "";
-    setStatus("Запит дружби надіслано");
+    setStatus("Friend request sent.");
   } catch (error) {
     setStatus(error.message);
   }
@@ -374,7 +364,7 @@ async function handleFriendRequest(requestId, action) {
   try {
     await api(`/api/friend-requests/${requestId}/${action}`, { method: "POST" });
     await Promise.all([loadRequests(), loadFriends()]);
-    setStatus(action === "accept" ? "Друга додано" : "Запит відхилено");
+    setStatus(action === "accept" ? "Friend request accepted." : "Friend request declined.");
   } catch (error) {
     setStatus(error.message);
   }
@@ -382,14 +372,30 @@ async function handleFriendRequest(requestId, action) {
 
 async function handleComposerSubmit(event) {
   event.preventDefault();
-  const content = elements.composerInput.value.trim();
+  const content = elements.composerInput?.value.trim();
   if (!content || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
   state.socket.send(JSON.stringify({ content }));
   elements.composerInput.value = "";
   autoresizeComposer();
 }
 
+async function handleFileUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file || !state.activeFriend) return;
+  const body = new FormData();
+  body.append("file", file);
+  try {
+    await api(`/api/direct/${state.activeFriend}/files`, { method: "POST", body });
+    setStatus(`File "${file.name}" sent.`);
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    event.target.value = "";
+  }
+}
+
 function autoresizeComposer() {
+  if (!elements.composerInput) return;
   elements.composerInput.style.height = "auto";
   elements.composerInput.style.height = `${Math.min(elements.composerInput.scrollHeight, 100)}px`;
 }
@@ -400,89 +406,58 @@ async function logout() {
   state.friends = [];
   state.requests = [];
   state.activeFriend = null;
-  state.activeFriendMeta = null;
   state.messagesByFriend.clear();
   disconnectSocket();
-  elements.authShell.classList.remove("hidden");
-  elements.appShell.classList.add("hidden");
+  elements.authShell?.classList.remove("hidden");
+  elements.appShell?.classList.add("hidden");
   switchAuthTab("login");
-  updateActiveFriendMeta();
   renderFriends();
   renderRequests();
   renderMessages();
-  toggleSidebar(false);
-  setStatus("Ви вийшли з акаунта");
+  updateActiveFriendMeta();
+  setStatus("Signed out");
 }
 
 function bindEvents() {
-  elements.loginTab.addEventListener("click", () => switchAuthTab("login"));
-  elements.registerTab.addEventListener("click", () => switchAuthTab("register"));
-
-  elements.loginForm.addEventListener("submit", event => {
+  elements.loginTab?.addEventListener("click", () => switchAuthTab("login"));
+  elements.registerTab?.addEventListener("click", () => switchAuthTab("register"));
+  elements.loginForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     submitAuth("/api/auth/login", elements.loginForm);
   });
-
-  elements.registerForm.addEventListener("submit", event => {
+  elements.registerForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     submitAuth("/api/auth/register", elements.registerForm);
   });
-
-  if (elements.friendAddBtn) elements.friendAddBtn.addEventListener("click", handleFriendAdd);
-  elements.friendUsername.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); handleFriendAdd(e); }
-  });
-  elements.logoutBtn.addEventListener("click", logout);
-  elements.composerForm.addEventListener("submit", handleComposerSubmit);
-  elements.composerInput.addEventListener("input", autoresizeComposer);
-
-  elements.composerInput.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  elements.friendForm?.addEventListener("submit", handleFriendAdd);
+  elements.logoutBtn?.addEventListener("click", logout);
+  elements.composerForm?.addEventListener("submit", handleComposerSubmit);
+  elements.composerInput?.addEventListener("input", autoresizeComposer);
+  elements.composerInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       elements.composerForm.requestSubmit();
     }
   });
-
-  elements.sidebarToggle.addEventListener("click", e => {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar();
-  });
-
-  elements.sidebarClose.addEventListener("click", e => {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleSidebar(false);
-  });
-
-  elements.sidebar.addEventListener("click", e => e.stopPropagation());
-  elements.sidebar.addEventListener("pointerdown", e => e.stopPropagation());
-  elements.sidebar.addEventListener("touchstart", e => e.stopPropagation(), { passive: true });
-
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && elements.sidebar.classList.contains("open")) toggleSidebar(false);
-  });
-
-  window.addEventListener("resize", () => {
-    if (!isMobileLayout() && elements.sidebar.classList.contains("open")) toggleSidebar(false);
-  });
-
-  if (elements.themeBtn) elements.themeBtn.addEventListener("click", nextTheme);
-  if (elements.themeBtnApp) elements.themeBtnApp.addEventListener("click", nextTheme);
+  elements.fileBtn?.addEventListener("click", () => elements.fileInput?.click());
+  elements.fileInput?.addEventListener("change", handleFileUpload);
+  elements.sidebarToggle?.addEventListener("click", () => toggleSidebar());
+  elements.sidebarClose?.addEventListener("click", () => toggleSidebar(false));
+  elements.themeBtn?.addEventListener("click", toggleTheme);
+  elements.themeBtnApp?.addEventListener("click", toggleTheme);
 }
 
 async function init() {
-  initTheme();
   bindEvents();
   switchAuthTab("login");
-  updateActiveFriendMeta();
   renderFriends();
   renderRequests();
   renderMessages();
+  updateActiveFriendMeta();
   try {
     await refreshSession();
   } catch {
-    setStatus("Готово до входу");
+    setStatus("Ready for login");
   }
 }
 
