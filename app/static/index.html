@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="uk" data-theme="light">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
@@ -23,49 +23,49 @@
         <button class="topbtn" id="theme-btn" type="button">Theme</button>
       </header>
 
-      <div class="auth-tabs" role="tablist" aria-label="Авторизація">
-        <button class="tab active" id="tab-login" role="tab" aria-selected="true" type="button">Увійти</button>
-        <button class="tab" id="tab-register" role="tab" aria-selected="false" type="button">Реєстрація</button>
+      <div class="auth-tabs" role="tablist" aria-label="Authentication">
+        <button class="tab active" id="tab-login" role="tab" aria-selected="true" type="button">Login</button>
+        <button class="tab" id="tab-register" role="tab" aria-selected="false" type="button">Register</button>
       </div>
 
       <form class="auth-form active" id="login-form" autocomplete="on">
         <label class="field">
-          <span>Логін</span>
+          <span>Username</span>
           <input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" />
         </label>
 
         <label class="field">
-          <span>Пароль</span>
+          <span>Password</span>
           <input name="password" type="password" required autocomplete="current-password" />
         </label>
 
-        <button class="primary" type="submit">Відкрити чати</button>
+        <button class="primary" type="submit">Open chats</button>
       </form>
 
       <form class="auth-form" id="register-form" autocomplete="on">
         <label class="field">
-          <span>Логін</span>
+          <span>Username</span>
           <input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" />
         </label>
 
         <label class="field">
-          <span>Ім'я</span>
+          <span>Name</span>
           <input name="display_name" autocomplete="name" />
         </label>
 
         <label class="field">
-          <span>Пароль</span>
+          <span>Password</span>
           <input name="password" type="password" required autocomplete="new-password" />
         </label>
 
-        <button class="primary" type="submit">Створити акаунт</button>
+        <button class="primary" type="submit">Create account</button>
       </form>
 
       <p class="auth-error" id="auth-error" aria-live="polite"></p>
     </div>
   </div>
 
-  <button class="fab-menu hidden" id="sidebar-toggle" aria-label="Меню" aria-expanded="false" type="button">
+  <button class="fab-menu hidden" id="sidebar-toggle" aria-label="Menu" aria-expanded="false" type="button">
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <line x1="3" y1="6" x2="21" y2="6" stroke-width="2" stroke-linecap="round"></line>
       <line x1="3" y1="12" x2="21" y2="12" stroke-width="2" stroke-linecap="round"></line>
@@ -74,12 +74,12 @@
   </button>
 
   <div class="app-shell hidden" id="app-shell">
-    <aside class="sidebar" id="sidebar" aria-label="Бічна панель">
+    <aside class="sidebar" id="sidebar" aria-label="Sidebar">
       <header class="sidebar-top">
         <div class="brand sidebar-brand-center">Prism</div>
         <div class="side-actions">
           <button class="topbtn" id="theme-btn-app" type="button">Theme</button>
-          <button class="topbtn" id="sidebar-close" type="button" aria-label="Закрити">x</button>
+          <button class="topbtn" id="sidebar-close" type="button" aria-label="Close">x</button>
         </div>
       </header>
 
@@ -87,31 +87,31 @@
         <div class="avatar avatar-button" id="user-avatar">?</div>
         <input id="avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
         <div class="me-meta">
-          <div class="me-name" id="user-name">Гість</div>
+          <div class="me-name" id="user-name">Guest</div>
           <div class="me-handle" id="user-handle">@guest</div>
         </div>
         <div class="me-actions">
-          <button class="topbtn" id="account-btn" type="button">Акаунт</button>
-          <button class="topbtn" id="avatar-btn" type="button">Аватарка</button>
-          <button class="topbtn" id="logout-btn" type="button">Вийти</button>
+          <button class="topbtn" id="account-btn" type="button">Account</button>
+          <button class="topbtn" id="avatar-btn" type="button">Avatar</button>
+          <button class="topbtn" id="logout-btn" type="button">Logout</button>
         </div>
       </section>
 
       <section class="panel">
-        <div class="panel-title">Додати друга</div>
+        <div class="panel-title">Add friend</div>
         <form class="pill" id="friend-form" autocomplete="off">
           <input id="friend-username" placeholder="username" autocapitalize="none" spellcheck="false" />
-          <button class="pill-btn" type="submit" aria-label="Додати">+</button>
+          <button class="pill-btn" type="submit" aria-label="Add">+</button>
         </form>
       </section>
 
       <section class="panel">
-        <div class="panel-title">Запити</div>
+        <div class="panel-title">Requests</div>
         <div class="list" id="requests-list"></div>
       </section>
 
-      <section class="panel">
-        <div class="panel-title">Друзі</div>
+      <section class="panel grow-panel">
+        <div class="panel-title">Friends</div>
         <div class="list" id="friends-list"></div>
       </section>
     </aside>
@@ -121,13 +121,13 @@
         <div class="chat-person">
           <div class="avatar" id="chat-avatar">DM</div>
           <div class="chat-meta">
-            <div class="chat-title" id="chat-title">Виберіть друга</div>
-            <div class="chat-sub" id="chat-subtitle">Прийміть запит або виберіть друга зі списку.</div>
+            <div class="chat-title" id="chat-title">Select a friend</div>
+            <div class="chat-sub" id="chat-subtitle">Accept a request or choose a friend from the list.</div>
           </div>
         </div>
         <div class="chat-right">
-          <button class="topbtn" id="call-btn" type="button" disabled>Дзвінок</button>
-          <span class="status" id="chat-status">Офлайн</span>
+          <button class="topbtn" id="call-btn" type="button" disabled>Call</button>
+          <span class="status" id="chat-status">Offline</span>
         </div>
       </header>
 
@@ -136,15 +136,15 @@
       <footer class="input-area">
         <form class="input-wrapper" id="composer-form" autocomplete="off">
           <input id="file-input" type="file" hidden />
-          <button class="send-btn secondary" id="file-btn" type="button" disabled aria-label="Надіслати файл">+</button>
-          <textarea id="composer-input" rows="1" maxlength="2000" placeholder="Повідомлення..." disabled></textarea>
-          <button class="send-btn" id="send-btn" type="submit" disabled aria-label="Надіслати">
+          <button class="send-btn secondary" id="file-btn" type="button" disabled aria-label="Send file">+</button>
+          <textarea id="composer-input" rows="1" maxlength="2000" placeholder="Message..." disabled></textarea>
+          <button class="send-btn" id="send-btn" type="submit" disabled aria-label="Send">
             <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 12h14M12 5l7 7-7 7"></path>
             </svg>
           </button>
         </form>
-        <div class="status-line" id="status-line">Чат не вибрано</div>
+        <div class="status-line" id="status-line">No chat selected</div>
       </footer>
     </main>
   </div>
@@ -153,11 +153,11 @@
     <div class="viewer-card">
       <header class="topbar viewer-topbar">
         <div>
-          <div class="brand" id="viewer-title">Файл</div>
+          <div class="brand" id="viewer-title">File</div>
           <div class="viewer-meta" id="viewer-meta"></div>
         </div>
         <div class="side-actions">
-          <a class="topbtn" id="viewer-download" href="#" target="_blank" rel="noreferrer">Відкрити</a>
+          <a class="topbtn" id="viewer-download" href="#" target="_blank" rel="noreferrer">Open</a>
           <button class="topbtn" id="viewer-close" type="button">x</button>
         </div>
       </header>
@@ -169,8 +169,8 @@
     <div class="viewer-card">
       <header class="topbar viewer-topbar">
         <div>
-          <div class="brand">Акаунт</div>
-          <div class="viewer-meta">Зміна ніку, імені та пароля</div>
+          <div class="brand">Account</div>
+          <div class="viewer-meta">Update username, display name, and password</div>
         </div>
         <div class="side-actions">
           <button class="topbtn" id="account-close" type="button">x</button>
@@ -178,23 +178,23 @@
       </header>
       <form class="auth-form active" id="account-form" autocomplete="on">
         <label class="field">
-          <span>Логін</span>
+          <span>Username</span>
           <input id="account-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" />
         </label>
         <label class="field">
-          <span>Ім'я</span>
+          <span>Name</span>
           <input id="account-display-name" name="display_name" autocomplete="name" />
         </label>
         <label class="field">
-          <span>Поточний пароль</span>
+          <span>Current password</span>
           <input id="account-current-password" name="current_password" type="password" autocomplete="current-password" />
         </label>
         <label class="field">
-          <span>Новий пароль</span>
+          <span>New password</span>
           <input id="account-new-password" name="new_password" type="password" autocomplete="new-password" />
         </label>
-        <button class="topbtn" id="toggle-password-btn" type="button">Показати пароль</button>
-        <button class="primary" type="submit">Зберегти</button>
+        <button class="topbtn" id="toggle-password-btn" type="button">Show password</button>
+        <button class="primary" type="submit">Save</button>
       </form>
     </div>
   </dialog>

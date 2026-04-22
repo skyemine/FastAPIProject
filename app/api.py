@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TypeVar
 
@@ -586,7 +586,7 @@ def ensure_sqlite_schema_compatibility(database: Database) -> None:
 
 
 def issue_session_cookie(response: Response, session_manager: SessionManager, settings: Settings, user: UserIdentity) -> None:
-    expires_at = datetime.now(timezone.utc).timestamp() + settings.session_max_age_seconds
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.session_max_age_seconds)
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_manager.issue_token(user.id),
@@ -600,7 +600,13 @@ def issue_session_cookie(response: Response, session_manager: SessionManager, se
 
 
 def clear_session_cookie(response: Response, settings: Settings) -> None:
-    response.delete_cookie(key=settings.session_cookie_name, path="/")
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite="strict",
+    )
 
 
 def current_identity_from_request(request: Request, database: Database, session_manager: SessionManager, settings: Settings) -> UserIdentity:

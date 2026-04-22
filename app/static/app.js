@@ -5,6 +5,13 @@ const state = {
   activeFriend: null,
   messagesByFriend: new Map(),
   socket: null,
+  socketMeta: {
+    friendUsername: null,
+    intentionalClose: false,
+    reconnectTimer: null,
+    reconnectAttempts: 0,
+  },
+  viewerObjectUrl: null,
   theme: localStorage.getItem("prism-theme") || "light",
   call: {
     peerConnection: null,
@@ -110,6 +117,11 @@ function notifyIncomingMessage(message) {
 
 function toggleSidebar(forceOpen) {
   if (!elements.sidebar || !elements.sidebarToggle) return;
+  if (window.innerWidth >= 1024) {
+    elements.sidebar.classList.remove("open");
+    elements.sidebarToggle.setAttribute("aria-expanded", "false");
+    return;
+  }
   const shouldOpen = forceOpen ?? !elements.sidebar.classList.contains("open");
   elements.sidebar.classList.toggle("open", shouldOpen);
   elements.sidebarToggle.setAttribute("aria-expanded", String(shouldOpen));
@@ -141,6 +153,13 @@ async function api(path, options = {}) {
 
 function setStatus(message) {
   if (elements.statusLine) elements.statusLine.textContent = message;
+}
+
+function clearReconnectTimer() {
+  if (state.socketMeta.reconnectTimer) {
+    window.clearTimeout(state.socketMeta.reconnectTimer);
+    state.socketMeta.reconnectTimer = null;
+  }
 }
 
 function parseServerDate(value) {
@@ -233,6 +252,20 @@ function setAuthenticatedSession(user) {
   if (elements.accountDisplayName) elements.accountDisplayName.value = user.display_name || "";
 }
 
+function resetConversationState() {
+  clearReconnectTimer();
+  state.friends = [];
+  state.requests = [];
+  state.activeFriend = null;
+  state.messagesByFriend.clear();
+  disconnectSocket();
+  teardownCall(false);
+  renderFriends();
+  renderRequests();
+  renderMessages();
+  updateActiveFriendMeta();
+}
+
 function openAccountModal() {
   if (!elements.accountModal || !state.session?.user) return;
   elements.accountUsername.value = state.session.user.username || "";
@@ -252,12 +285,16 @@ function togglePasswordVisibility() {
   elements.accountCurrentPassword.type = nextType;
   elements.accountNewPassword.type = nextType;
   if (elements.togglePasswordBtn) {
-    elements.togglePasswordBtn.textContent = nextType === "password" ? "Показати пароль" : "Сховати пароль";
+    elements.togglePasswordBtn.textContent = nextType === "password" ? "Show password" : "Hide password";
   }
 }
 
 function closeViewer() {
   if (!elements.viewerModal) return;
+  if (state.viewerObjectUrl) {
+    URL.revokeObjectURL(state.viewerObjectUrl);
+    state.viewerObjectUrl = null;
+  }
   elements.viewerModal.close();
   if (elements.viewerBody) elements.viewerBody.innerHTML = "";
   if (elements.viewerMeta) elements.viewerMeta.textContent = "";
@@ -299,6 +336,7 @@ async function openAttachmentViewer(message) {
 
     const blob = await response.blob();
     const objectUrl = URL.createObjectURL(blob);
+    state.viewerObjectUrl = objectUrl;
     elements.viewerBody.innerHTML = "";
 
     if (kind === "image") {
@@ -462,6 +500,14 @@ function renderMessages() {
   elements.messageStream.innerHTML = "";
   const messages = state.messagesByFriend.get(state.activeFriend) || [];
 
+  if (!state.activeFriend) {
+    const empty = createElement("div", "empty-state");
+    empty.appendChild(createElement("strong", "", "Select a friend"));
+    empty.appendChild(createElement("p", "", "Accept a request or choose an existing conversation."));
+    elements.messageStream.appendChild(empty);
+    return;
+  }
+
   if (!messages.length) {
     const empty = createElement("div", "empty-state");
     empty.appendChild(createElement("strong", "", "No messages yet"));
@@ -507,6 +553,7 @@ function renderMessages() {
 
 function updateActiveFriendMeta() {
   const friend = state.friends.find((item) => item.username === state.activeFriend);
+  const socketReady = Boolean(state.socket && state.socket.readyState === WebSocket.OPEN);
   if (!friend) {
     if (elements.chatTitle) elements.chatTitle.textContent = "Select a friend";
     if (elements.chatSubtitle) elements.chatSubtitle.textContent = "Accept a request or choose a friend from the list.";
@@ -525,21 +572,41 @@ function updateActiveFriendMeta() {
   if (elements.chatTitle) elements.chatTitle.textContent = friend.display_name || friend.username;
   if (elements.chatSubtitle) elements.chatSubtitle.textContent = `@${friend.username}`;
   setAvatar(elements.chatAvatar, friend, "??");
-  if (elements.chatStatus) elements.chatStatus.textContent = friend.is_online ? "Online" : "Offline";
-  if (elements.callBtn) {
-    elements.callBtn.disabled = false;
-    elements.callBtn.textContent = state.call.activeFriend ? "Завершити" : "Дзвінок";
+  if (elements.chatStatus) {
+    elements.chatStatus.textContent = socketReady
+      ? (friend.is_online ? "Online" : "Offline")
+      : "Connecting";
   }
-  if (elements.composerInput) elements.composerInput.disabled = false;
-  if (elements.sendBtn) elements.sendBtn.disabled = false;
-  if (elements.fileBtn) elements.fileBtn.disabled = false;
+  if (elements.callBtn) {
+    elements.callBtn.disabled = !socketReady;
+    elements.callBtn.textContent = state.call.activeFriend ? "End call" : "Call";
+  }
+  if (elements.composerInput) elements.composerInput.disabled = !socketReady;
+  if (elements.sendBtn) elements.sendBtn.disabled = !socketReady;
+  if (elements.fileBtn) elements.fileBtn.disabled = !socketReady;
 }
 
 function disconnectSocket() {
+  clearReconnectTimer();
   if (state.socket) {
+    state.socketMeta.intentionalClose = true;
     state.socket.close();
     state.socket = null;
   }
+  state.socketMeta.friendUsername = null;
+  state.socketMeta.reconnectAttempts = 0;
+}
+
+function scheduleReconnect(username) {
+  if (!state.session?.authenticated || state.activeFriend !== username) return;
+  clearReconnectTimer();
+  const delay = Math.min(4000, 600 + state.socketMeta.reconnectAttempts * 500);
+  state.socketMeta.reconnectAttempts += 1;
+  state.socketMeta.reconnectTimer = window.setTimeout(() => {
+    if (state.session?.authenticated && state.activeFriend === username) {
+      connectSocket(username, { reconnecting: true });
+    }
+  }, delay);
 }
 
 function sendSignal(payload) {
@@ -653,16 +720,37 @@ async function handleSignal(payload) {
   }
 }
 
-function connectSocket(username) {
+function connectSocket(username, options = {}) {
   disconnectSocket();
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${protocol}://${window.location.host}/ws/direct/${username}`);
   state.socket = socket;
-  setStatus(`Connecting to @${username}...`);
+  state.socketMeta.friendUsername = username;
+  state.socketMeta.intentionalClose = false;
+  setStatus(options.reconnecting ? `Reconnecting to @${username}...` : `Connecting to @${username}...`);
+  updateActiveFriendMeta();
 
-  socket.addEventListener("open", () => setStatus(`Connected to @${username}`));
+  socket.addEventListener("open", () => {
+    clearReconnectTimer();
+    state.socketMeta.reconnectAttempts = 0;
+    setStatus(`Connected to @${username}`);
+    updateActiveFriendMeta();
+  });
   socket.addEventListener("close", () => {
-    if (state.socket === socket) setStatus("Connection closed");
+    const closedIntentionally = state.socketMeta.intentionalClose;
+    if (state.socket === socket) {
+      state.socket = null;
+      updateActiveFriendMeta();
+      if (!closedIntentionally && state.activeFriend === username) {
+        setStatus(`Connection lost with @${username}. Retrying...`);
+        scheduleReconnect(username);
+      } else {
+        setStatus("Connection closed");
+      }
+    }
+  });
+  socket.addEventListener("error", () => {
+    if (state.activeFriend === username) setStatus(`Network issue while connecting to @${username}`);
   });
 
   socket.addEventListener("message", (event) => {
@@ -738,10 +826,10 @@ async function refreshSession() {
   const session = await api("/api/session");
   state.session = session;
   if (!session.authenticated) {
+    resetConversationState();
     elements.authShell?.classList.remove("hidden");
     elements.appShell?.classList.add("hidden");
     elements.sidebarToggle?.classList.add("hidden");
-    disconnectSocket();
     return false;
   }
 
@@ -759,6 +847,7 @@ async function refreshSession() {
 async function submitAuth(path, formElement) {
   const payload = Object.fromEntries(new FormData(formElement).entries());
   try {
+    resetConversationState();
     const user = await api(path, { method: "POST", body: JSON.stringify(payload) });
     if (elements.authError) elements.authError.textContent = "";
     formElement.reset();
@@ -857,6 +946,12 @@ async function handleAccountSave(event) {
     const user = await api("/api/users/me", { method: "PATCH", body: JSON.stringify(payload) });
     if (state.session?.user) state.session.user = user;
     setAuthenticatedSession(user);
+    if (elements.accountCurrentPassword) elements.accountCurrentPassword.type = "password";
+    if (elements.accountNewPassword) elements.accountNewPassword.type = "password";
+    if (elements.togglePasswordBtn) elements.togglePasswordBtn.textContent = "Show password";
+    if (state.activeFriend) {
+      connectSocket(state.activeFriend, { reconnecting: true });
+    }
     closeAccountModal();
     await loadFriends();
     updateActiveFriendMeta();
@@ -878,6 +973,10 @@ async function startCall() {
     setStatus("Calls are not supported on this device.");
     return;
   }
+  if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+    setStatus("Wait until the chat connection is ready.");
+    return;
+  }
   try {
     await ensureLocalAudio();
     const peerConnection = ensurePeerConnection();
@@ -894,25 +993,19 @@ async function startCall() {
 }
 
 async function logout() {
-  await api("/api/auth/logout", { method: "POST" });
-  state.session = null;
-  state.friends = [];
-  state.requests = [];
-  state.activeFriend = null;
-  state.messagesByFriend.clear();
-  disconnectSocket();
-  teardownCall(false);
-  closeViewer();
-  closeAccountModal();
-  elements.authShell?.classList.remove("hidden");
-  elements.appShell?.classList.add("hidden");
-  elements.sidebarToggle?.classList.add("hidden");
-  switchAuthTab("login");
-  renderFriends();
-  renderRequests();
-  renderMessages();
-  updateActiveFriendMeta();
-  setStatus("Signed out");
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } finally {
+    state.session = null;
+    resetConversationState();
+    closeViewer();
+    closeAccountModal();
+    elements.authShell?.classList.remove("hidden");
+    elements.appShell?.classList.add("hidden");
+    elements.sidebarToggle?.classList.add("hidden");
+    switchAuthTab("login");
+    setStatus("Signed out");
+  }
 }
 
 function bindEvents() {
@@ -967,6 +1060,9 @@ function bindEvents() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && elements.viewerModal?.open) closeViewer();
     if (event.key === "Escape" && elements.accountModal?.open) closeAccountModal();
+  });
+  window.addEventListener("resize", () => {
+    if (window.innerWidth >= 1024) toggleSidebar(false);
   });
 }
 
