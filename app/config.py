@@ -28,6 +28,12 @@ def parse_csv(value: str | None, default: list[str]) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def get_default_allowed_hosts(app_env: str) -> list[str]:
+    if app_env.lower() == "production":
+        return ["127.0.0.1", "localhost"]
+    return ["*"]
+
+
 @dataclass(slots=True)
 class Settings:
     app_env: str
@@ -59,20 +65,25 @@ class Settings:
                 raise RuntimeError("COOKIE_SECURE=true is required in production.")
             if not self.force_https:
                 raise RuntimeError("FORCE_HTTPS=true is required in production.")
+            if not os.getenv("ALLOWED_HOSTS"):
+                raise RuntimeError("ALLOWED_HOSTS must list your production domains or server IPs before deploy.")
+            if "*" in self.allowed_hosts:
+                raise RuntimeError("ALLOWED_HOSTS cannot contain '*' in production.")
         elif len(self.secret_key) < 16:
             raise RuntimeError("SECRET_KEY is too short. Use at least 16 characters locally and 32+ in production.")
 
 
 def load_settings(database_url: str | None = None) -> Settings:
+    app_env = os.getenv("APP_ENV", "development")
     return Settings(
-        app_env=os.getenv("APP_ENV", "development"),
+        app_env=app_env,
         app_name=os.getenv("APP_NAME", "PulseChat"),
         database_url=get_database_url(database_url),
         secret_key=os.getenv("SECRET_KEY", DEFAULT_SECRET_KEY),
         session_cookie_name=os.getenv("SESSION_COOKIE_NAME", "pulsechat_session"),
         session_max_age_seconds=int(os.getenv("SESSION_MAX_AGE_SECONDS", str(60 * 60 * 24 * 7))),
         cookie_secure=parse_bool(os.getenv("COOKIE_SECURE"), default=False),
-        allowed_hosts=parse_csv(os.getenv("ALLOWED_HOSTS"), default=["127.0.0.1", "localhost", "testserver"]),
+        allowed_hosts=parse_csv(os.getenv("ALLOWED_HOSTS"), default=get_default_allowed_hosts(app_env)),
         allowed_origins=parse_csv(os.getenv("ALLOWED_ORIGINS"), default=[]),
         force_https=parse_bool(os.getenv("FORCE_HTTPS"), default=False),
         auth_rate_limit_count=int(os.getenv("AUTH_RATE_LIMIT_COUNT", "8")),
