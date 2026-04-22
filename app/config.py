@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
-DEFAULT_DATABASE_URL = "sqlite:///./messenger.db"
 DEFAULT_SECRET_KEY = "change-this-secret-before-deploy"
 
 
+def get_default_storage_dir() -> str:
+    explicit_storage = os.getenv("APP_STORAGE_DIR")
+    if explicit_storage:
+        return explicit_storage
+    render_disk = os.getenv("RENDER_DISK_PATH")
+    if render_disk:
+        return str(Path(render_disk) / "prism")
+    return "."
+
+
 def get_database_url(explicit_value: str | None = None) -> str:
-    database_url = explicit_value or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+    storage_dir = Path(get_default_storage_dir())
+    default_sqlite = "sqlite:///./messenger.db"
+    if str(storage_dir) != ".":
+        default_sqlite = f"sqlite:///{(storage_dir / 'messenger.db').as_posix()}"
+    database_url = explicit_value or os.getenv("DATABASE_URL", default_sqlite)
     if database_url.startswith("postgres://"):
         return database_url.replace("postgres://", "postgresql+psycopg://", 1)
     if database_url.startswith("postgresql://") and "+psycopg" not in database_url:
@@ -55,6 +69,7 @@ class Settings:
     push_public_key: str
     push_private_key: str
     push_subject: str
+    storage_dir: str
 
     @property
     def is_production(self) -> bool:
@@ -98,4 +113,5 @@ def load_settings(database_url: str | None = None) -> Settings:
         push_public_key=os.getenv("PUSH_PUBLIC_KEY", ""),
         push_private_key=os.getenv("PUSH_PRIVATE_KEY", ""),
         push_subject=os.getenv("PUSH_SUBJECT", "mailto:admin@example.com"),
+        storage_dir=get_default_storage_dir(),
     )

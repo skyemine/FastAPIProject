@@ -350,6 +350,14 @@ textarea {
   color: var(--muted);
 }
 
+.fade-text {
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 84%, transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 84%, transparent 100%);
+}
+
 .avatar {
   width: 44px;
   height: 44px;
@@ -548,6 +556,7 @@ html[data-theme="dark"] .presence-dot {
 .chat-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   flex-shrink: 0;
 }
@@ -688,11 +697,11 @@ html[data-theme="dark"] .presence-dot {
 
 .input-wrapper {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
   background-color: var(--input-bg);
   border-radius: var(--radius);
-  padding: 6px 6px 6px 18px;
+  padding: 8px 8px 8px 18px;
   box-shadow: var(--shadow);
   max-width: 720px;
   margin: 0 auto;
@@ -702,9 +711,12 @@ html[data-theme="dark"] .presence-dot {
   flex: 1;
   border: none;
   background: transparent;
-  padding: 10px 0;
-  min-height: 42px;
+  padding: 8px 0;
+  min-height: 40px;
   max-height: 120px;
+  line-height: 1.45;
+  resize: none;
+  align-self: center;
 }
 
 .send-btn {
@@ -718,6 +730,8 @@ html[data-theme="dark"] .presence-dot {
   place-items: center;
   opacity: 0.25;
   transition: transform 0.12s ease, opacity 0.12s ease;
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .send-btn.secondary {
@@ -796,6 +810,34 @@ html[data-theme="dark"] .presence-dot {
 
 .viewer-topbar {
   margin-bottom: 10px;
+}
+
+.account-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.account-info-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  min-width: 0;
+}
+
+.account-info-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-info-value {
+  color: var(--text);
+  font-size: 14px;
+  min-width: 0;
 }
 
 .viewer-body {
@@ -909,5 +951,9 @@ html[data-theme="dark"] .presence-dot {
 
   .chat-right {
     gap: 6px;
+  }
+
+  .account-info-grid {
+    grid-template-columns: 1fr;
   }
 }

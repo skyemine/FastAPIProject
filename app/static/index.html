@@ -88,7 +88,7 @@
         <input id="avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
         <div class="me-meta">
           <div class="me-name" id="user-name">Guest</div>
-          <div class="me-handle" id="user-handle">@guest</div>
+          <div class="me-handle fade-text" id="user-handle">@guest</div>
         </div>
         <div class="me-actions">
           <button class="topbtn" id="account-btn" type="button">Account</button>
@@ -122,11 +122,10 @@
           <div class="avatar" id="chat-avatar">DM</div>
           <div class="chat-meta">
             <div class="chat-title" id="chat-title">Select a friend</div>
-            <div class="chat-sub" id="chat-subtitle">Accept a request or choose a friend from the list.</div>
+            <div class="chat-sub fade-text" id="chat-subtitle">Accept a request or choose a friend from the list.</div>
           </div>
         </div>
         <div class="chat-right">
-          <button class="topbtn" id="call-btn" type="button" disabled>Call</button>
           <span class="status" id="chat-status">Offline</span>
         </div>
       </header>
@@ -177,6 +176,24 @@
         </div>
       </header>
       <form class="auth-form active" id="account-form" autocomplete="on">
+        <div class="account-info-grid">
+          <div class="account-info-card">
+            <span class="account-info-label">User ID</span>
+            <strong class="account-info-value fade-text" id="account-user-id">-</strong>
+          </div>
+          <div class="account-info-card">
+            <span class="account-info-label">Joined</span>
+            <strong class="account-info-value fade-text" id="account-created-at">-</strong>
+          </div>
+          <div class="account-info-card">
+            <span class="account-info-label">Host</span>
+            <strong class="account-info-value fade-text" id="account-host">-</strong>
+          </div>
+          <div class="account-info-card">
+            <span class="account-info-label">Notifications</span>
+            <strong class="account-info-value fade-text" id="account-notifications">-</strong>
+          </div>
+        </div>
         <label class="field">
           <span>Username</span>
           <input id="account-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" />

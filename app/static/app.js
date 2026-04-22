@@ -65,6 +65,10 @@ const elements = {
   accountDisplayName: document.getElementById("account-display-name"),
   accountCurrentPassword: document.getElementById("account-current-password"),
   accountNewPassword: document.getElementById("account-new-password"),
+  accountUserId: document.getElementById("account-user-id"),
+  accountCreatedAt: document.getElementById("account-created-at"),
+  accountHost: document.getElementById("account-host"),
+  accountNotifications: document.getElementById("account-notifications"),
   togglePasswordBtn: document.getElementById("toggle-password-btn"),
   callBtn: document.getElementById("call-btn"),
   remoteAudio: document.getElementById("remote-audio"),
@@ -269,6 +273,24 @@ function formatFullDate(value) {
   }).format(date);
 }
 
+function describeNotificationStatus() {
+  if (!("Notification" in window)) return "Not supported";
+  if (Notification.permission === "granted") {
+    return state.session?.push_supported ? "Enabled" : "Browser only";
+  }
+  if (Notification.permission === "denied") return "Blocked";
+  return "Permission required";
+}
+
+function refreshAccountMeta() {
+  const user = state.session?.user;
+  if (!user) return;
+  if (elements.accountUserId) elements.accountUserId.textContent = String(user.id ?? "-");
+  if (elements.accountCreatedAt) elements.accountCreatedAt.textContent = formatFullDate(user.created_at) || "-";
+  if (elements.accountHost) elements.accountHost.textContent = window.location.host || "local";
+  if (elements.accountNotifications) elements.accountNotifications.textContent = describeNotificationStatus();
+}
+
 function createElement(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -330,6 +352,7 @@ function setAuthenticatedSession(user) {
   if (elements.userHandle) elements.userHandle.textContent = `@${user.username}`;
   if (elements.accountUsername) elements.accountUsername.value = user.username || "";
   if (elements.accountDisplayName) elements.accountDisplayName.value = user.display_name || "";
+  refreshAccountMeta();
 }
 
 function resetConversationState() {
@@ -352,6 +375,7 @@ function openAccountModal() {
   elements.accountDisplayName.value = state.session.user.display_name || "";
   elements.accountCurrentPassword.value = "";
   elements.accountNewPassword.value = "";
+  refreshAccountMeta();
   elements.accountModal.showModal();
 }
 

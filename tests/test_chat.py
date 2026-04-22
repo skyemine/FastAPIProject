@@ -27,6 +27,7 @@ def build_settings(tmp_path) -> Settings:
         push_public_key="",
         push_private_key="",
         push_subject="mailto:test@example.com",
+        storage_dir=str(tmp_path / "storage"),
     )
 
 

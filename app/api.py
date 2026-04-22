@@ -21,6 +21,7 @@ from sqlalchemy import and_, delete, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import Session, aliased, selectinload
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .chat import ConnectionManager
 from .config import Settings, load_settings
@@ -309,7 +310,7 @@ def ensure_push_configuration(settings: Settings) -> None:
     except Exception:
         return
 
-    push_dir = Path("data") / "push"
+    push_dir = Path(settings.storage_dir) / "data" / "push"
     private_key_path = push_dir / "vapid_private.pem"
     public_key_path = push_dir / "vapid_public.txt"
 
@@ -771,6 +772,7 @@ def ensure_sqlite_schema_compatibility(database: Database) -> None:
         return
 
     path = Path(database_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         return
 
@@ -823,7 +825,7 @@ def issue_session_cookie(response: Response, settings: Settings, token: str) -> 
         key=settings.session_cookie_name,
         value=token,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         secure=settings.cookie_secure,
         max_age=settings.session_max_age_seconds,
         expires=expires_at,
@@ -837,7 +839,7 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
         path="/",
         secure=settings.cookie_secure,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
     )
 
 
@@ -894,6 +896,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     )
     app.state.settings = resolved_settings
 
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
     app.add_middleware(
         SecurityHeadersMiddleware,
         enable_hsts=resolved_settings.cookie_secure or resolved_settings.force_https,
@@ -935,6 +938,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
         try:
             identity = current_identity_from_request(request, database, session_manager, resolved_settings)
         except HTTPException:
+            clear_session_cookie(response, resolved_settings)
             return SessionRead(
                 authenticated=False,
                 user=None,
@@ -1027,7 +1031,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     @app.post("/api/users/me/avatar", response_model=UserRead)
     async def upload_avatar(request: Request, file: UploadFile = File(...)) -> UserRead:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
-        avatars_dir = Path("uploads") / "avatars"
+        avatars_dir = Path(resolved_settings.storage_dir) / "uploads" / "avatars"
         avatars_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = Path(file.filename or "avatar.bin").name
@@ -1124,7 +1128,7 @@ def create_app(settings: Settings | None = None, database_url: str | None = None
     @app.post("/api/direct/{friend_username}/files", response_model=DirectMessageRead, status_code=status.HTTP_201_CREATED)
     async def upload_direct_file(friend_username: str, request: Request, file: UploadFile = File(...)) -> DirectMessageRead:
         identity = current_identity_from_request(request, database, session_manager, resolved_settings)
-        uploads_dir = Path("uploads")
+        uploads_dir = Path(resolved_settings.storage_dir) / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = Path(file.filename or "attachment.bin").name
